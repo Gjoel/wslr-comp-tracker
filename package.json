@@ -1,0 +1,14 @@
+{
+  "name": "wslr-comp-tracker",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "test":   "node test-scrape.js",
+    "scrape": "node scrape.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.48.0"
+  }
+}

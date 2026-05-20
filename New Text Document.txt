@@ -1,0 +1,224 @@
+import 'dotenv/config';
+import { chromium } from 'playwright';
+import { createClient } from '@supabase/supabase-js';
+
+// ---------- Config ----------
+
+const PROPERTIES = [
+  { name: 'WSLR (us)',                    slug: 'wollongong-surf-leisure-resort' },
+  { name: 'Novotel Wollongong',           slug: 'test-novotel-northbeach' },
+  { name: 'Quality Suites Pioneer Sands', slug: 'quality-suites-pioneer-sands' },
+  { name: 'Sage Hotel Wollongong',        slug: 'chifley-wollongong' },
+  { name: 'Corrimal Beach Tourist Park',  slug: 'corrimal-beach-tourist-park' },
+];
+
+const WEEKEND_COUNT = 12;   // upcoming Fri–Sun stays
+const MIDWEEK_COUNT = 4;    // upcoming Tue–Thu stays, every 3 weeks
+const DELAY_MIN_MS  = 3000;
+const DELAY_MAX_MS  = 6000;
+
+// ---------- Supabase ----------
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// ---------- Date sampling ----------
+
+function fmt(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function generateDateList() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dates = [];
+
+  // Next N Fri–Sun weekend stays
+  let cur = new Date(today);
+  while (cur.getDay() !== 5) cur.setDate(cur.getDate() + 1); // advance to Friday
+  for (let i = 0; i < WEEKEND_COUNT; i++) {
+    const inDate  = new Date(cur);
+    const outDate = new Date(cur); outDate.setDate(outDate.getDate() + 2);
+    dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType: 'weekend' });
+    cur.setDate(cur.getDate() + 7);
+  }
+
+  // Midweek Tue–Thu stays every 3 weeks
+  let mid = new Date(today);
+  while (mid.getDay() !== 2) mid.setDate(mid.getDate() + 1); // advance to Tuesday
+  mid.setDate(mid.getDate() + 7); // skip imminent week
+  for (let i = 0; i < MIDWEEK_COUNT; i++) {
+    const inDate  = new Date(mid);
+    const outDate = new Date(mid); outDate.setDate(outDate.getDate() + 2);
+    dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType: 'midweek' });
+    mid.setDate(mid.getDate() + 21);
+  }
+
+  return dates.sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+}
+
+// ---------- Scrape ----------
+
+function buildUrl(slug, checkIn, checkOut) {
+  const params = new URLSearchParams({
+    checkin: checkIn,
+    checkout: checkOut,
+    group_adults: '2',
+    group_children: '0',
+    no_rooms: '1',
+    selected_currency: 'AUD',
+  });
+  return `https://www.booking.com/hotel/au/${slug}.en-gb.html?${params.toString()}`;
+}
+
+function extractPrices(text) {
+  const matches = text.match(/(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)/g) || [];
+  return matches
+    .map(m => parseFloat(m.replace(/[^\d.]/g, '')))
+    .filter(n => n >= 50 && n < 10000);
+}
+
+async function getRateContext(page) {
+  const selectors = [
+    '#hprt-table',
+    'table.hprt-table',
+    '[data-testid="property-most-relevant-units"]',
+    '#availability_block',
+    '#maxotel_rooms',
+    '[id*="hprt"]',
+    '[data-component="availability"]',
+  ];
+  for (const sel of selectors) {
+    const el = await page.$(sel);
+    if (el) {
+      const text = await el.innerText();
+      if (text && text.length > 100) {
+        return { text, source: `selector:${sel}`, strict: false };
+      }
+    }
+  }
+  const text = await page.locator('body').innerText();
+  return { text, source: 'body-fallback', strict: true };
+}
+
+async function scrapeOne(browser, property, checkIn, checkOut, stayType) {
+  const nights = (new Date(checkOut) - new Date(checkIn)) / 86400000;
+  const url = buildUrl(property.slug, checkIn, checkOut);
+  const context = await browser.newContext({
+    userAgent:
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    locale: 'en-AU',
+    viewport: { width: 1280, height: 800 },
+  });
+  const page = await context.newPage();
+
+  const baseRecord = {
+    property: property.name,
+    property_slug: property.slug,
+    check_in: checkIn,
+    check_out: checkOut,
+    currency: 'AUD',
+    source: 'booking.com',
+  };
+
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(5000);
+
+    for (const sel of [
+      '[aria-label="Dismiss sign-in info."]',
+      '[aria-label="Dismiss sign in information."]',
+      'button[aria-label*="Dismiss"]',
+    ]) {
+      try { await page.click(sel, { timeout: 800 }); break; } catch {}
+    }
+
+    const bodyText = await page.locator('body').innerText();
+    const isNotFound      = /page not found/i.test(bodyText);
+    const isSoldOut       = /sold out|no rooms available/i.test(bodyText);
+    const showsAlternates = /similar properties available for your dates|alternative dates/i.test(bodyText);
+    const notAvailable    = /not available on our site for your dates/i.test(bodyText);
+
+    if (isNotFound) {
+      console.log(`  ✗ 404 ${property.name} ${checkIn}`);
+      return null; // don't insert
+    }
+
+    const { text, source, strict } = await getRateContext(page);
+    let prices = extractPrices(text);
+    if (strict) prices = prices.filter(n => n >= 150);
+
+    if (isSoldOut || (showsAlternates && notAvailable && prices.length === 0)) {
+      console.log(`  • UNAVAILABLE  ${property.name}  ${checkIn} (${stayType})`);
+      return { ...baseRecord, rate: null, available: false, notes: `unavailable; source=${source}` };
+    }
+
+    if (prices.length === 0) {
+      console.log(`  ⚠ NO MATCH    ${property.name}  ${checkIn} (${stayType})  source=${source}`);
+      try { await page.screenshot({ path: `debug-${property.slug}-${checkIn}.png`, fullPage: true }); } catch {}
+      return { ...baseRecord, rate: null, available: false, notes: `no match; source=${source}` };
+    }
+
+    const total = Math.min(...prices);
+    const perNight = total / nights;
+    console.log(
+      `  ✓ ${property.name.padEnd(36)} ${checkIn} (${stayType})  ` +
+      `AU$${total.toFixed(2)}/${nights}n = AU$${perNight.toFixed(2)}/n  [${source}]`
+    );
+    return {
+      ...baseRecord,
+      rate: total,
+      available: true,
+      notes: `stay_type=${stayType}; price_tokens=${prices.length}; source=${source}`,
+    };
+  } catch (err) {
+    console.log(`  ✗ ERROR ${property.name} ${checkIn}: ${err.message}`);
+    return null;
+  } finally {
+    await context.close();
+  }
+}
+
+// ---------- Main ----------
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
+
+(async () => {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars');
+    process.exit(1);
+  }
+
+  const dates = generateDateList();
+  console.log(`Scraping ${PROPERTIES.length} properties × ${dates.length} date pairs = ${PROPERTIES.length * dates.length} requests\n`);
+
+  const browser = await chromium.launch({ headless: true });
+  const records = [];
+
+  for (const d of dates) {
+    for (const prop of PROPERTIES) {
+      const rec = await scrapeOne(browser, prop, d.checkIn, d.checkOut, d.stayType);
+      if (rec) records.push(rec);
+      await sleep(rand(DELAY_MIN_MS, DELAY_MAX_MS));
+    }
+  }
+
+  await browser.close();
+
+  console.log(`\nInserting ${records.length} records into Supabase...`);
+  if (records.length) {
+    const { error } = await supabase.from('competitor_rates').insert(records);
+    if (error) {
+      console.error('Supabase insert error:', error);
+      process.exit(1);
+    }
+  }
+  console.log('Done.');
+})();
