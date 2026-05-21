@@ -1,0 +1,40 @@
+name: Weekly competitor scrape
+
+on:
+  schedule:
+    # 19:00 UTC Sunday = 05:00 Mon AEST / 06:00 Mon AEDT
+    - cron: '0 19 * * 0'
+  workflow_dispatch:  # manual run button in the Actions tab
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run scrape
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scrape.js
+
+      - name: Upload debug screenshots if any
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: 'debug-*.png'
+          if-no-files-found: ignore
+          retention-days: 7
