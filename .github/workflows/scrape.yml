@@ -1,9 +1,9 @@
-name: Weekly competitor scrape
+name: Competitor scrape
 
 on:
   schedule:
-    # 14:00 UTC Sunday = 12am Mon AEST / 1am Mon AEDT — proper overnight, full 12-month scrape
-    - cron: '0 14 * * 0'
+    # 14:00 UTC daily = 12am AEST / 1am AEDT — proper overnight every night
+    - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       start_date:
