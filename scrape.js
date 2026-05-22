@@ -11,8 +11,8 @@ const DAYS_AHEAD   = TEST_MODE ? 10 : 365;
 const CONCURRENCY  = parseInt(process.env.CONCURRENCY || (TEST_MODE ? '4' : '6'), 10);
 const DELAY_MIN_MS = 1500;
 const DELAY_MAX_MS = 3500;
-const START_DATE   = process.env.START_DATE;  // YYYY-MM-DD optional (workflow input)
-const END_DATE     = process.env.END_DATE;    // YYYY-MM-DD optional (workflow input)
+const START_DATE   = process.env.START_DATE;
+const END_DATE     = process.env.END_DATE;
 
 // ---------- Supabase ----------
 
@@ -118,6 +118,25 @@ function pricesFromText(text) {
     .filter(n => n >= 50 && n < 10000);
 }
 
+// Decide whether a line of text looks like a real room name (vs a price label, count, etc.)
+function looksLikeRoomName(line) {
+  if (!line || line.length <= 3 || line.length >= 120) return false;
+  // Anything containing a currency amount anywhere in the line (e.g. "Price AUD 195", "from AU$220")
+  if (/(?:AUD|AU\$|A\$)\s*\d/i.test(line)) return false;
+  if (/\$\s*\d{2,}/.test(line)) return false;
+  // Lines that are just price/promotion labels
+  if (/^(?:price|from|now|was|total|today|cheapest|select|book)\b/i.test(line)) return false;
+  // Currency-prefixed lines
+  if (/^(?:AUD|AU\$|A\$|\$)/i.test(line)) return false;
+  // Counts of guests/beds/etc.
+  if (/^\d+\s*(?:guests?|adults?|children?|beds?|nights?)/i.test(line)) return false;
+  // Promotion or constraint lines
+  if (/^(only \d+ left|free cancellation|breakfast included|no prepayment|max persons?:|sleeps \d+)/i.test(line)) return false;
+  // Must contain at least one letter (avoid pure-numeric junk)
+  if (!/[a-z]/i.test(line)) return false;
+  return true;
+}
+
 async function getRoomRates(page, nights) {
   const tableSelectors = [
     '#hprt-table',
@@ -144,14 +163,7 @@ async function getRoomRates(page, nights) {
     if (prices.length === 0) continue;
     const stayTotal = Math.min(...prices);
 
-    const lines = text.split('\n')
-      .map(l => l.trim())
-      .filter(l =>
-        l && l.length > 3 && l.length < 120 &&
-        !/^(?:AUD|AU\$|A\$|\$)/i.test(l) &&
-        !/^\d+\s*(?:guests?|adults?|children?|beds?|nights?)/i.test(l) &&
-        !/^(only \d+ left|free cancellation|breakfast included|no prepayment|max persons?:)/i.test(l)
-      );
+    const lines = text.split('\n').map(l => l.trim()).filter(looksLikeRoomName);
     const roomName = lines[0];
     if (!roomName) continue;
 

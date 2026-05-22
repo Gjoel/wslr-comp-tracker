@@ -15,10 +15,10 @@
     .cheapest { background-color: #d1fae5; }
     .most-expensive { color: #b91c1c; }
     .na { color: #9ca3af; font-style: italic; }
-    .rate-cell .room { font-size: 11px; color: #64748b; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .rate-cell .substitution { font-size: 10px; color: #b45309; margin-top: 2px; max-width: 180px; }
+    .rate-cell .room { font-size: 11px; color: #64748b; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rate-cell .substitution { font-size: 10px; color: #b45309; margin-top: 2px; max-width: 220px; }
     .rate-cell .fallback { font-size: 10px; color: #b45309; margin-top: 2px; }
-    .modal-backdrop { background: rgba(15, 23, 42, 0.4); }
+    .modal-backdrop { background: rgba(15, 23, 42, 0.5); }
 
     .heatmap-scroll { overflow-x: auto; border-radius: 8px; scroll-behavior: smooth; }
     .heatmap-inner { display: inline-block; min-width: 100%; }
@@ -64,10 +64,11 @@
     .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
     .room-chip { display: inline-block; font-size: 10px; padding: 1px 6px; border: 1px solid #cbd5e1; border-radius: 999px; margin-right: 4px; margin-bottom: 4px; cursor: pointer; background: white; color: #475569; }
     .room-chip:hover { background: #f1f5f9; color: #0f172a; }
+    .modal-sticky-header { position: sticky; top: 0; background: white; z-index: 10; border-bottom: 1px solid #e2e8f0; }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
-  <div class="max-w-7xl mx-auto p-6">
+  <div class="w-full px-6 py-6">
 
     <header class="mb-6 flex items-start justify-between flex-wrap gap-4">
       <div>
@@ -96,6 +97,7 @@
         <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
         <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
       </div>
+      <div class="ml-auto text-xs text-slate-500" id="coverageNote"></div>
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
@@ -146,16 +148,15 @@
       </div>
     </div>
 
-    <!-- Trends & changes -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Trends & changes</h2>
-        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape. Per-property summary plus the biggest individual movements.</p>
+        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape. Per-property summary plus the biggest individual movements. Substitutions are excluded from top movers (shown in cards instead).</p>
       </div>
       <div class="p-6">
         <h3 class="font-semibold text-sm mb-3 text-slate-700">By property</h3>
-        <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-6"></div>
-        <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers</h3>
+        <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
+        <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers (excluding substitutions)</h3>
         <div id="topMoversContainer" class="border border-slate-200 rounded p-3 bg-slate-50"></div>
       </div>
     </div>
@@ -166,56 +167,60 @@
   </div>
 
   <!-- Admin modal -->
-  <div id="adminModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 overflow-y-auto py-8">
-    <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full p-6 m-4">
-      <div class="flex justify-between items-center mb-4">
+  <div id="adminModal" class="fixed inset-0 modal-backdrop hidden items-start justify-center z-50 overflow-y-auto py-8" onclick="if(event.target===this)closeAdmin()">
+    <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 my-8">
+      <div class="modal-sticky-header flex justify-between items-center p-6 rounded-t-lg">
         <h3 class="text-lg font-semibold">Manage properties</h3>
-        <button onclick="closeAdmin()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        <button onclick="closeAdmin()" class="text-slate-500 hover:text-slate-900 text-3xl leading-none px-3 py-1 hover:bg-slate-100 rounded">×</button>
       </div>
-
-      <div class="mb-6 p-4 bg-slate-50 rounded border border-slate-200">
-        <h4 class="font-medium mb-2 text-sm">Add a new property</h4>
-        <div class="flex flex-col gap-2">
-          <input id="newUrl" type="text" placeholder="Paste Booking.com URL" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
-          <input id="newName" type="text" placeholder="Display name (auto-filled from URL, you can edit)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
-          <div class="flex justify-end">
-            <button onclick="addProperty()" class="px-4 py-2 rounded bg-slate-900 text-white text-sm font-medium">Add property</button>
+      <div class="p-6 pt-2">
+        <div class="mb-6 p-4 bg-slate-50 rounded border border-slate-200">
+          <h4 class="font-medium mb-2 text-sm">Add a new property</h4>
+          <div class="flex flex-col gap-2">
+            <input id="newUrl" type="text" placeholder="Paste Booking.com URL" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+            <input id="newName" type="text" placeholder="Display name (auto-filled from URL, you can edit)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+            <div class="flex justify-end">
+              <button onclick="addProperty()" class="px-4 py-2 rounded bg-slate-900 text-white text-sm font-medium">Add property</button>
+            </div>
           </div>
+          <div id="adminMsg" class="text-sm mt-2 hidden"></div>
         </div>
-        <div id="adminMsg" class="text-sm mt-2 hidden"></div>
-      </div>
 
-      <h4 class="font-medium mb-2 text-sm">Current properties</h4>
-      <div id="propertyList" class="space-y-3"></div>
+        <h4 class="font-medium mb-2 text-sm">Current properties</h4>
+        <p class="text-xs text-slate-500 mb-3">Room name suggestions are pulled from scrape data 4+ months out (when most room types are available, not just the cheapest).</p>
+        <div id="propertyList" class="space-y-3"></div>
+      </div>
     </div>
   </div>
 
   <!-- Run scrape modal -->
-  <div id="scrapeModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 overflow-y-auto py-8">
-    <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6 m-4">
-      <div class="flex justify-between items-center mb-4">
+  <div id="scrapeModal" class="fixed inset-0 modal-backdrop hidden items-start justify-center z-50 overflow-y-auto py-8" onclick="if(event.target===this)closeScrapeModal()">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 my-8">
+      <div class="modal-sticky-header flex justify-between items-center p-6 rounded-t-lg">
         <h3 class="text-lg font-semibold">Run scrape on demand</h3>
-        <button onclick="closeScrapeModal()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+        <button onclick="closeScrapeModal()" class="text-slate-500 hover:text-slate-900 text-3xl leading-none px-3 py-1 hover:bg-slate-100 rounded">×</button>
       </div>
-      <p class="text-sm text-slate-600 mb-4">Triggers a fresh scrape for the date range below. Defaults to the next 30 days.</p>
+      <div class="p-6 pt-2">
+        <p class="text-sm text-slate-600 mb-4">Triggers a fresh scrape for the date range below. Defaults to the next 30 days.</p>
 
-      <div class="grid grid-cols-2 gap-3 mb-4">
-        <div>
-          <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">From</label>
-          <input type="date" id="scrapeStart" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <div>
+            <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">From</label>
+            <input type="date" id="scrapeStart" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+          </div>
+          <div>
+            <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">To</label>
+            <input type="date" id="scrapeEnd" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+          </div>
         </div>
-        <div>
-          <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">To</label>
-          <input type="date" id="scrapeEnd" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+
+        <div class="bg-slate-50 rounded p-3 mb-4 text-xs text-slate-600" id="scrapeEstimate">Estimating…</div>
+        <div id="scrapeError" class="text-sm mb-3 hidden text-rose-600"></div>
+
+        <div class="flex justify-end gap-2">
+          <button onclick="closeScrapeModal()" class="px-4 py-2 rounded text-sm font-medium bg-white border border-slate-300 text-slate-700">Cancel</button>
+          <button id="btnSubmitScrape" onclick="submitScrape()" class="px-4 py-2 rounded text-sm font-medium bg-amber-500 text-white hover:bg-amber-600">Trigger scrape</button>
         </div>
-      </div>
-
-      <div class="bg-slate-50 rounded p-3 mb-4 text-xs text-slate-600" id="scrapeEstimate">Estimating…</div>
-      <div id="scrapeError" class="text-sm mb-3 hidden text-rose-600"></div>
-
-      <div class="flex justify-end gap-2">
-        <button onclick="closeScrapeModal()" class="px-4 py-2 rounded text-sm font-medium bg-white border border-slate-300 text-slate-700">Cancel</button>
-        <button id="btnSubmitScrape" onclick="submitScrape()" class="px-4 py-2 rounded text-sm font-medium bg-amber-500 text-white hover:bg-amber-600">Trigger scrape</button>
       </div>
     </div>
   </div>
@@ -234,6 +239,8 @@
     let properties = [];
     let chart = null;
     let cachedDateMap = null;
+    let roomCatalog = {};   // {propertyName: [roomNames sorted by frequency]} — fetched from 4+ months out
+    let loadToken = 0;       // to ignore stale fetches
     const TABLE_CAP = 30;
     const CHART_CAP = 30;
 
@@ -259,11 +266,21 @@
       return m ? m[1] : null;
     }
     function wslrName() { const w = properties.find(p => p.is_wslr); return w ? w.name : null; }
-    function escAttr(s) { return (s || '').replace(/"/g, '&quot;').replace(/'/g, "&#39;"); }
+    function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, "&#39;").replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function median(arr) {
       if (!arr || arr.length === 0) return null;
       const sorted = [...arr].sort((a, b) => a - b);
       return sorted[Math.floor(sorted.length / 2)];
+    }
+    function isLikelyRealRoom(name) {
+      if (!name) return false;
+      const trimmed = name.trim();
+      if (trimmed.length < 4) return false;
+      if (trimmed.startsWith('(')) return false;  // sold out placeholders
+      if (/(?:aud|au\$|a\$)\s*\d/i.test(trimmed)) return false;
+      if (/^(?:price|from|now|was|total|today|cheapest)\b/i.test(trimmed)) return false;
+      if (!/[a-z]/i.test(trimmed)) return false;
+      return true;
     }
 
     function isSubstitution(rec) {
@@ -273,17 +290,6 @@
       if (sameName) return false;
       const delta = Math.abs((rec.rate - rec.prev.rate) / rec.prev.rate);
       return delta > SIGNIFICANT_DELTA;
-    }
-
-    function getRecentRooms(propertyName) {
-      const counts = {};
-      for (const r of allRows) {
-        if (r.property === propertyName && r.room_name && r.rate != null) {
-          const name = r.room_name.trim();
-          if (!name.startsWith('(')) counts[name] = (counts[name] || 0) + 1;
-        }
-      }
-      return Object.entries(counts).sort(([, a], [, b]) => b - a).map(([name]) => name);
     }
 
     // ---------- Date range ----------
@@ -300,8 +306,18 @@
       applyRange(start, end);
     }
     function applyRange(start, end) {
-      if (!start || !end) return;
-      if (start > end) { alert('Start date must be before end date.'); return; }
+      if (!start || !end) {
+        // Revert any partial input change to match state
+        if (rangeStartDate) document.getElementById('rangeStart').value = fmtYMD(rangeStartDate);
+        if (rangeEndDate) document.getElementById('rangeEnd').value = fmtYMD(rangeEndDate);
+        return;
+      }
+      if (start > end) {
+        alert('Start date must be before end date.');
+        if (rangeStartDate) document.getElementById('rangeStart').value = fmtYMD(rangeStartDate);
+        if (rangeEndDate) document.getElementById('rangeEnd').value = fmtYMD(rangeEndDate);
+        return;
+      }
       rangeStartDate = start;
       rangeEndDate = end;
       document.getElementById('rangeStart').value = fmtYMD(start);
@@ -388,6 +404,7 @@
     async function openAdmin() {
       document.getElementById('adminModal').classList.remove('hidden');
       document.getElementById('adminModal').classList.add('flex');
+      await fetchRoomCatalog();
       await renderPropertyList();
     }
     function closeAdmin() {
@@ -395,22 +412,53 @@
       document.getElementById('adminModal').classList.remove('flex');
       load();
     }
+
+    async function fetchRoomCatalog() {
+      // Pull a slice of data from 4+ months out to discover the full inventory of room types per property.
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const targetStart = new Date(today); targetStart.setMonth(today.getMonth() + 4);
+      const targetEnd = new Date(targetStart); targetEnd.setDate(targetStart.getDate() + 30);
+
+      const { data, error } = await sb
+        .from('competitor_room_rates')
+        .select('property, room_name, rate, scrape_run_id, scraped_at, check_in')
+        .gte('check_in', fmtYMD(targetStart))
+        .lte('check_in', fmtYMD(targetEnd))
+        .limit(20000);
+
+      if (error || !data) { roomCatalog = {}; return; }
+
+      const counts = {};
+      for (const r of data) {
+        if (!r.room_name || r.rate == null) continue;
+        const name = r.room_name.trim();
+        if (!isLikelyRealRoom(name)) continue;
+        if (!counts[r.property]) counts[r.property] = {};
+        counts[r.property][name] = (counts[r.property][name] || 0) + 1;
+      }
+      roomCatalog = {};
+      for (const prop of Object.keys(counts)) {
+        roomCatalog[prop] = Object.entries(counts[prop]).sort(([, a], [, b]) => b - a).map(([n]) => n);
+      }
+    }
+
     async function renderPropertyList() {
       const { data, error } = await sb.from('competitor_properties').select('*').order('display_order', { ascending: true });
       if (error) { document.getElementById('propertyList').innerHTML = '<p class="text-rose-600 text-sm">' + error.message + '</p>'; return; }
 
       document.getElementById('propertyList').innerHTML = data.map(p => {
-        const recent = getRecentRooms(p.name).slice(0, 8);
-        const chipsHtml = recent.length > 0
-          ? recent.map(r => `<span class="room-chip" onclick="document.getElementById('pattern-${p.id}').value=${JSON.stringify(r)}">${r.length > 35 ? r.slice(0, 35) + '…' : r}</span>`).join('')
-          : '<span class="text-xs text-slate-400 italic">No scrape data yet for this property.</span>';
+        const cataloged = (roomCatalog[p.name] || []).slice(0, 12);
+        const chipsHtml = cataloged.length > 0
+          ? cataloged.map(r => `<span class="room-chip" onclick="document.getElementById('pattern-${p.id}').value=${JSON.stringify(r)}">${escAttr(r.length > 38 ? r.slice(0, 38) + '…' : r)}</span>`).join('')
+          : '<span class="text-xs text-slate-400 italic">No room data found 4+ months out yet — run a scrape that covers far-future dates and reopen this dialog.</span>';
 
         return `
           <div class="border border-slate-200 rounded p-3 ${p.is_wslr ? 'bg-emerald-50' : ''}">
             <div class="flex items-center justify-between mb-3">
               <div>
-                <div class="font-medium text-sm">${p.name} ${p.is_wslr ? '<span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
-                <div class="text-xs text-slate-500">${p.slug}</div>
+                <div class="font-medium text-sm">${escAttr(p.name)} ${p.is_wslr ? '<span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
+                <div class="text-xs text-slate-500">${escAttr(p.slug)}</div>
               </div>
               <div class="flex items-center gap-2">
                 <span class="text-xs ${p.active ? 'text-emerald-700' : 'text-slate-400'}">${p.active ? 'Active' : 'Paused'}</span>
@@ -463,6 +511,13 @@
       }
       document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
       document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
+      // ESC closes any open modal
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (!document.getElementById('adminModal').classList.contains('hidden')) closeAdmin();
+          if (!document.getElementById('scrapeModal').classList.contains('hidden')) closeScrapeModal();
+        }
+      });
     });
 
     async function addProperty() {
@@ -489,7 +544,9 @@
 
     // ---------- Data ----------
     async function load() {
+      const myToken = ++loadToken;
       const { data: props, error: pErr } = await sb.from('competitor_properties').select('*').eq('active', true).order('display_order', { ascending: true });
+      if (myToken !== loadToken) return;  // a newer load has started; abandon this one
       if (pErr) { document.getElementById('lastUpdated').textContent = 'Error loading properties: ' + pErr.message; return; }
       properties = props || [];
 
@@ -502,6 +559,7 @@
         .lte('check_in', endStr)
         .order('check_in', { ascending: true })
         .limit(50000);
+      if (myToken !== loadToken) return;  // stale, abandon
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
       if (data && data.length >= 50000) console.warn('Hit 50K row limit — data may be truncated');
       allRows = data || [];
@@ -573,6 +631,7 @@
     function render() {
       const { allDates, currentRows } = buildDateMap();
       renderHeader(currentRows);
+      renderCoverageNote(allDates);
       renderStats(allDates);
       renderTable(allDates);
       renderChart(allDates);
@@ -582,6 +641,18 @@
       renderInsights(allDates);
       renderTrends(allDates);
       renderTopMovers(allDates);
+    }
+
+    function renderCoverageNote(allDates) {
+      const el = document.getElementById('coverageNote');
+      if (!rangeStartDate || !rangeEndDate) { el.textContent = ''; return; }
+      const requestedDays = Math.round((rangeEndDate - rangeStartDate) / 86400000) + 1;
+      const haveDates = allDates.length;
+      if (haveDates < requestedDays * 0.8) {
+        el.innerHTML = `<span class="text-amber-700">⚠ ${haveDates} dates with data of ${requestedDays} requested</span> — daily scrape may not have populated yet.`;
+      } else {
+        el.textContent = `${haveDates} of ${requestedDays} dates with data`;
+      }
     }
 
     function renderHeader(rows) {
@@ -650,20 +721,20 @@
           if (!rec) return `<td class="${cls}">${fmtAUD(null)}</td>`;
           if (rec.rate == null) {
             const reason = rec.room_name?.replace(/[()]/g, '') || 'unavailable';
-            return `<td class="${cls}"><span class="na">${reason}</span></td>`;
+            return `<td class="${cls}"><span class="na">${escAttr(reason)}</span></td>`;
           }
           let extras = '';
           if (isSubstitution(rec)) {
             const prevDisp = displayRate(rec.prev.rate, d.check_in, d.check_out);
-            const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 22 ? rec.prev.room_name.slice(0, 22) + '…' : (rec.prev.room_name || '');
-            extras += `<div class="substitution" title="Room type changed — cheaper room likely sold out. Previously: ${escAttr(rec.prev.room_name || '')} at ${fmtAUD(prevDisp)}">⚠ was ${fmtAUD(prevDisp)} (${prevRoomShort})</div>`;
+            const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
+            extras += `<div class="substitution" title="Room type changed — cheaper room likely sold out. Previously: ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
           }
           if (rec.fallbackUsed) {
             extras += `<div class="fallback" title="No room matched the configured comparable pattern. Showing cheapest available instead.">⚠ no comparable room — fallback</div>`;
           }
           return `<td class="${cls}">
             <div class="font-semibold">${fmtAUD(displayed)}</div>
-            <div class="room" title="${escAttr(rec.room_name)}">${rec.room_name}</div>
+            <div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>
             ${extras}
           </td>`;
         }).join('');
@@ -674,7 +745,7 @@
         </tr>`;
       }).join('');
       t.innerHTML = `<thead><tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
-        ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${h}</th>`).join('')}
+        ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${escAttr(h)}</th>`).join('')}
       </tr></thead><tbody>${rows}</tbody>`;
       if (truncated) {
         note.classList.remove('hidden');
@@ -886,7 +957,7 @@
           return `<div class="${cellCls}" style="background: ${color}" title="${escAttr(title)}"></div>`;
         }).join('');
         return `<div class="heat-row">
-          <div class="row-label ${p.is_wslr ? 'wslr' : ''}">${p.name}${p.is_wslr ? ' (us)' : ''}</div>
+          <div class="row-label ${p.is_wslr ? 'wslr' : ''}">${escAttr(p.name)}${p.is_wslr ? ' (us)' : ''}</div>
           <div class="cells-container">${cells}</div>
         </div>`;
       }).join('');
@@ -950,7 +1021,6 @@
       `;
     }
 
-    // ---------- Trends ----------
     function renderTrends(allDates) {
       const stats = {};
       for (const p of properties) {
@@ -995,7 +1065,7 @@
         return `
           <div class="border border-slate-200 rounded p-4 ${t.isWslr ? 'bg-emerald-50' : 'bg-white'}">
             <div class="flex items-center justify-between mb-2">
-              <div class="font-medium text-sm">${t.name}${t.isWslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
+              <div class="font-medium text-sm">${escAttr(t.name)}${t.isWslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
               <div class="text-lg font-bold ${changeColor}">${changeStr}</div>
             </div>
             <div class="text-xs text-slate-500 mb-2">
@@ -1018,33 +1088,30 @@
         for (const p of properties) {
           const r = d.props[p.name];
           if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
+          if (isSubstitution(r)) continue;  // skip substitutions
           const delta = (r.rate - r.prev.rate) / r.prev.rate;
           if (Math.abs(delta) < SIGNIFICANT_DELTA) continue;
           movers.push({
             property: p.name, isWslr: p.is_wslr, check_in: d.check_in,
             prevRate: r.prev.rate, currRate: r.rate,
-            prevRoom: r.prev.room_name, currRoom: r.room_name,
-            delta, substituted: isSubstitution(r),
+            currRoom: r.room_name, delta,
           });
         }
       }
       movers.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
       const top = movers.slice(0, 10);
       if (top.length === 0) {
-        document.getElementById('topMoversContainer').innerHTML = '<p class="text-sm text-slate-500 py-3">No individual rate changes &gt;5% in this range.</p>';
+        document.getElementById('topMoversContainer').innerHTML = '<p class="text-sm text-slate-500 py-3">No real rate changes &gt;5% in this range (excluding substitutions).</p>';
         return;
       }
       document.getElementById('topMoversContainer').innerHTML = top.map(m => {
         const sign = m.delta > 0 ? '+' : '';
         const color = m.delta > 0 ? 'text-rose-700' : 'text-emerald-700';
-        const detail = m.substituted
-          ? `<span class="text-amber-700">⚠ substitution:</span> ${m.prevRoom} → ${m.currRoom}`
-          : `same room: ${m.currRoom}`;
         return `
           <div class="flex justify-between text-sm py-2 border-b border-slate-100">
             <div>
-              <div class="font-medium ${m.isWslr ? 'text-emerald-700' : ''}">${m.property}${m.isWslr ? ' (us)' : ''} · ${fmtDate(m.check_in)}</div>
-              <div class="text-xs text-slate-500">${detail}</div>
+              <div class="font-medium ${m.isWslr ? 'text-emerald-700' : ''}">${escAttr(m.property)}${m.isWslr ? ' (us)' : ''} · ${fmtDate(m.check_in)}</div>
+              <div class="text-xs text-slate-500">same room: ${escAttr(m.currRoom)}</div>
             </div>
             <div class="text-right ${color}">
               <div class="font-semibold">AU$${Math.round(m.prevRate)} → AU$${Math.round(m.currRate)}</div>
@@ -1069,11 +1136,11 @@
       renderHeatmap(allDates);
     });
     document.getElementById('rangeStart').addEventListener('change', (e) => {
-      if (!e.target.value) return;
+      if (!e.target.value) { e.target.value = rangeStartDate ? fmtYMD(rangeStartDate) : ''; return; }
       applyRange(new Date(e.target.value + 'T00:00:00'), rangeEndDate);
     });
     document.getElementById('rangeEnd').addEventListener('change', (e) => {
-      if (!e.target.value) return;
+      if (!e.target.value) { e.target.value = rangeEndDate ? fmtYMD(rangeEndDate) : ''; return; }
       applyRange(rangeStartDate, new Date(e.target.value + 'T00:00:00'));
     });
 
