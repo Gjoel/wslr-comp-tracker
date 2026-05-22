@@ -7,10 +7,12 @@ import fs from 'fs';
 // ---------- Config ----------
 
 const TEST_MODE    = !!process.env.TEST;
-const DAYS_AHEAD   = TEST_MODE ? 10 : 180;
+const DAYS_AHEAD   = TEST_MODE ? 10 : 365;
 const CONCURRENCY  = parseInt(process.env.CONCURRENCY || (TEST_MODE ? '4' : '6'), 10);
 const DELAY_MIN_MS = 1500;
 const DELAY_MAX_MS = 3500;
+const START_DATE   = process.env.START_DATE;  // YYYY-MM-DD optional (workflow input)
+const END_DATE     = process.env.END_DATE;    // YYYY-MM-DD optional (workflow input)
 
 // ---------- Supabase ----------
 
@@ -55,17 +57,42 @@ function fmt(d) {
 function generateDateList() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  today.setDate(today.getDate() + 1);
+
+  let startDate, endDate;
+  if (START_DATE) {
+    startDate = new Date(START_DATE + 'T00:00:00');
+    if (END_DATE) {
+      endDate = new Date(END_DATE + 'T00:00:00');
+    } else {
+      endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + DAYS_AHEAD - 1);
+    }
+  } else if (END_DATE) {
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() + 1);
+    endDate = new Date(END_DATE + 'T00:00:00');
+  } else {
+    startDate = new Date(today);
+    startDate.setDate(today.getDate() + 1);
+    endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + DAYS_AHEAD - 1);
+  }
+
+  if (endDate < startDate) {
+    console.error(`End date ${fmt(endDate)} is before start date ${fmt(startDate)}.`);
+    process.exit(1);
+  }
 
   const dates = [];
-  for (let i = 0; i < DAYS_AHEAD; i++) {
-    const inDate = new Date(today);
-    inDate.setDate(today.getDate() + i);
+  const cursor = new Date(startDate);
+  while (cursor <= endDate) {
+    const inDate = new Date(cursor);
     const outDate = new Date(inDate);
     outDate.setDate(inDate.getDate() + 1);
     const dow = inDate.getDay();
     const stayType = (dow === 5 || dow === 6) ? 'weekend' : 'midweek';
     dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType });
+    cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
 }
@@ -248,6 +275,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   }
 
   console.log(`Mode: ${TEST_MODE ? 'TEST' : 'FULL'}   Days ahead: ${DAYS_AHEAD}   Concurrency: ${CONCURRENCY}`);
+  if (START_DATE || END_DATE) console.log(`Custom range from workflow inputs — START_DATE=${START_DATE || '(default)'}  END_DATE=${END_DATE || '(default)'}`);
   console.log(`Scrape run id: ${SCRAPE_RUN_ID}`);
   console.log(`Supabase URL: ${SUPABASE_URL}`);
   console.log('Pinging Supabase...');
@@ -263,6 +291,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   console.log(`Loaded ${PROPERTIES.length} properties: ${PROPERTIES.map(p => p.name).join(', ')}\n`);
 
   const dates = generateDateList();
+  console.log(`Date range: ${dates[0].checkIn} → ${dates[dates.length - 1].checkIn}  (${dates.length} dates)\n`);
   const jobs = [];
   for (const d of dates) {
     for (const prop of PROPERTIES) {

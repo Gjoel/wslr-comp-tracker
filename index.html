@@ -16,9 +16,9 @@
     .most-expensive { color: #b91c1c; }
     .na { color: #9ca3af; font-style: italic; }
     .rate-cell .room { font-size: 11px; color: #64748b; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .rate-cell .substitution { font-size: 10px; color: #b45309; margin-top: 2px; max-width: 180px; }
     .modal-backdrop { background: rgba(15, 23, 42, 0.4); }
 
-    /* Heatmap */
     .heatmap-scroll { overflow-x: auto; border-radius: 8px; scroll-behavior: smooth; }
     .heatmap-inner { display: inline-block; min-width: 100%; }
     .heat-row { display: flex; align-items: stretch; }
@@ -38,6 +38,10 @@
     .heat-cell.sold-out::after {
       content: '×'; color: rgba(255,255,255,0.6);
       position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .heat-cell.substitution::before {
+      content: ''; position: absolute; top: 2px; right: 2px;
+      width: 5px; height: 5px; background: #f59e0b; border-radius: 50%;
     }
     .heat-cell:hover { outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
     .header-row .row-label { background: white; }
@@ -67,11 +71,10 @@
         <button id="btnPerNight" class="px-4 py-2 rounded-md font-medium text-sm bg-slate-900 text-white">Per night</button>
         <button id="btnTotal"    class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700">Stay total</button>
         <button onclick="openAdmin()" class="px-4 py-2 rounded-md font-medium text-sm bg-emerald-600 text-white">Manage properties</button>
-        <button id="btnRunScrape" onclick="runScrape()" class="px-4 py-2 rounded-md font-medium text-sm bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200">Run scrape</button>
+        <button id="btnRunScrape" onclick="openScrapeModal()" class="px-4 py-2 rounded-md font-medium text-sm bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200">Run scrape…</button>
       </div>
     </header>
 
-    <!-- Date range picker -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
         <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
@@ -88,14 +91,12 @@
       </div>
     </div>
 
-    <!-- Stat cards -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
 
-    <!-- Snapshot table -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Date snapshot</h2>
-        <p class="text-sm text-slate-500 mt-1">Cheapest room per property per date. Room name shown beneath each rate.</p>
+        <p class="text-sm text-slate-500 mt-1">Cheapest room per property per date. <span class="text-amber-700">Amber cells indicate a likely room substitution (cheaper room sold out).</span></p>
       </div>
       <div class="overflow-x-auto p-6">
         <table class="w-full text-sm" id="snapshotTable"></table>
@@ -103,7 +104,6 @@
       </div>
     </div>
 
-    <!-- Chart -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Rate comparison by date</h2>
@@ -114,11 +114,10 @@
       </div>
     </div>
 
-    <!-- Market view (heatmap) -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Market view</h2>
-        <p class="text-sm text-slate-500 mt-1">Pricing patterns across all tracked properties for the selected range.</p>
+        <p class="text-sm text-slate-500 mt-1">Pricing patterns across all tracked properties for the selected range. Cells with a small amber dot are substitutions (hover for detail).</p>
       </div>
       <div class="p-6">
         <div id="longRangeStats"></div>
@@ -135,9 +134,7 @@
         </div>
 
         <div id="monthChips" class="flex flex-wrap gap-1.5 mb-3"></div>
-
         <div id="heatmapContainer"></div>
-
         <div id="insightsContainer" class="mt-8"></div>
       </div>
     </div>
@@ -172,14 +169,41 @@
     </div>
   </div>
 
+  <!-- Run scrape modal -->
+  <div id="scrapeModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 overflow-y-auto py-8">
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full p-6 m-4">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-semibold">Run scrape on demand</h3>
+        <button onclick="closeScrapeModal()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+      </div>
+      <p class="text-sm text-slate-600 mb-4">Triggers a fresh scrape for the date range below. Defaults to the next 30 days. The scheduled weekly scrape covers the full 12-month horizon overnight.</p>
+
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">From</label>
+          <input type="date" id="scrapeStart" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+        </div>
+        <div>
+          <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">To</label>
+          <input type="date" id="scrapeEnd" class="w-full text-sm border border-slate-300 rounded px-3 py-2">
+        </div>
+      </div>
+
+      <div class="bg-slate-50 rounded p-3 mb-4 text-xs text-slate-600" id="scrapeEstimate">Estimating…</div>
+      <div id="scrapeError" class="text-sm mb-3 hidden text-rose-600"></div>
+
+      <div class="flex justify-end gap-2">
+        <button onclick="closeScrapeModal()" class="px-4 py-2 rounded text-sm font-medium bg-white border border-slate-300 text-slate-700">Cancel</button>
+        <button id="btnSubmitScrape" onclick="submitScrape()" class="px-4 py-2 rounded text-sm font-medium bg-amber-500 text-white hover:bg-amber-600">Trigger scrape</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    // ====== CONFIG (injected by GitHub Actions at deploy time) ======
     const SUPABASE_URL = '__SUPABASE_URL__';
     const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
-    // The Apps Script web app URL — hardcoded because re-deploying to the same
-    // deployment keeps the URL stable. If it ever changes, update this one line.
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
-    // ================================================================
+    const SUBSTITUTION_DELTA = 0.05;
 
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let unit = 'perNight';
@@ -192,7 +216,6 @@
     const TABLE_CAP = 30;
     const CHART_CAP = 30;
 
-    // ---------- Helpers ----------
     function fmtAUD(n) { if (n == null) return '<span class="na">—</span>'; return 'AU$' + Math.round(n); }
     function fmtDate(s) {
       const d = new Date(s + 'T00:00:00');
@@ -215,6 +238,16 @@
       return m ? m[1] : null;
     }
     function wslrName() { const w = properties.find(p => p.is_wslr); return w ? w.name : null; }
+    function escAttr(s) { return (s || '').replace(/"/g, '&quot;'); }
+
+    function isSubstitution(rec) {
+      if (!rec || !rec.prev) return false;
+      if (rec.rate == null || rec.prev.rate == null) return false;
+      const sameName = (rec.room_name || '').trim() === (rec.prev.room_name || '').trim();
+      if (sameName) return false;
+      const delta = Math.abs((rec.rate - rec.prev.rate) / rec.prev.rate);
+      return delta > SUBSTITUTION_DELTA;
+    }
 
     // ---------- Date range ----------
     function setRangePreset(preset) {
@@ -224,7 +257,7 @@
       let end   = new Date(today);
       if      (preset === 'next30')   { end.setDate(today.getDate() + 30); }
       else if (preset === 'next90')   { end.setDate(today.getDate() + 90); }
-      else if (preset === 'upcoming') { end.setDate(today.getDate() + 200); }
+      else if (preset === 'upcoming') { end.setDate(today.getDate() + 365); }
       else if (preset === 'past30')   { start.setDate(today.getDate() - 30); }
       else if (preset === 'past90')   { start.setDate(today.getDate() - 90); }
       applyRange(start, end);
@@ -240,36 +273,85 @@
       load();
     }
 
-    // ---------- Run scrape ----------
-    async function runScrape() {
-      if (!confirm('Trigger a scrape now? It runs in the background for ~30–60 minutes. You\'ll get the digest email when it finishes.')) return;
-      const btn = document.getElementById('btnRunScrape');
-      const originalHTML = btn.innerHTML;
-      btn.innerHTML = 'Triggering…';
+    // ---------- Run scrape modal ----------
+    function openScrapeModal() {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const start = new Date(today); start.setDate(today.getDate() + 1);
+      const end = new Date(start); end.setDate(start.getDate() + 30);
+      document.getElementById('scrapeStart').value = fmtYMD(start);
+      document.getElementById('scrapeEnd').value = fmtYMD(end);
+      document.getElementById('scrapeError').classList.add('hidden');
+      document.getElementById('btnSubmitScrape').disabled = false;
+      document.getElementById('btnSubmitScrape').textContent = 'Trigger scrape';
+      updateScrapeEstimate();
+      const m = document.getElementById('scrapeModal');
+      m.classList.remove('hidden'); m.classList.add('flex');
+    }
+    function closeScrapeModal() {
+      const m = document.getElementById('scrapeModal');
+      m.classList.add('hidden'); m.classList.remove('flex');
+    }
+    function updateScrapeEstimate() {
+      const start = document.getElementById('scrapeStart').value;
+      const end = document.getElementById('scrapeEnd').value;
+      const el = document.getElementById('scrapeEstimate');
+      if (!start || !end) { el.textContent = 'Pick both dates to see estimate.'; return; }
+      const days = Math.max(1, Math.round((new Date(end + 'T00:00:00') - new Date(start + 'T00:00:00')) / 86400000) + 1);
+      const propCount = properties.length || 4;
+      const jobs = days * propCount;
+      const seconds = Math.ceil(jobs * 5 / 6) + 30;
+      const minutes = Math.max(1, Math.ceil(seconds / 60));
+      el.textContent = `${days} dates × ${propCount} properties = ${jobs} jobs · ~${minutes} min estimated`;
+    }
+    async function submitScrape() {
+      const start = document.getElementById('scrapeStart').value;
+      const end = document.getElementById('scrapeEnd').value;
+      const errEl = document.getElementById('scrapeError');
+      const btn = document.getElementById('btnSubmitScrape');
+
+      if (!start || !end) {
+        errEl.textContent = 'Please pick both start and end dates.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (new Date(start) > new Date(end)) {
+        errEl.textContent = 'Start must be before end.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      errEl.classList.add('hidden');
+      btn.textContent = 'Triggering…';
       btn.disabled = true;
 
       try {
-        // Use text/plain to avoid CORS preflight issues with Apps Script; the script parses JSON.parse on the body anyway.
         const res = await fetch(APPS_SCRIPT_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ action: 'trigger_scrape' }),
+          body: JSON.stringify({ action: 'trigger_scrape', startDate: start, endDate: end }),
           redirect: 'follow',
         });
         const data = await res.json();
         if (data.ok) {
-          btn.innerHTML = '✓ Triggered';
-          alert('Scrape triggered. Watch progress on the GitHub Actions tab; you\'ll get the digest email when it finishes.');
-          setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 5000);
+          closeScrapeModal();
+          const btnMain = document.getElementById('btnRunScrape');
+          const orig = btnMain.innerHTML;
+          btnMain.innerHTML = '✓ Triggered';
+          btnMain.disabled = true;
+          alert(`Scrape triggered for ${start} → ${end}. Watch progress on the GitHub Actions tab.`);
+          setTimeout(() => { btnMain.innerHTML = orig; btnMain.disabled = false; }, 5000);
         } else {
-          btn.innerHTML = originalHTML;
+          errEl.textContent = data.error || 'Unknown error';
+          errEl.classList.remove('hidden');
+          btn.textContent = 'Trigger scrape';
           btn.disabled = false;
-          alert('Failed to trigger: ' + (data.error || 'unknown error'));
         }
       } catch (err) {
-        btn.innerHTML = originalHTML;
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+        btn.textContent = 'Trigger scrape';
         btn.disabled = false;
-        alert('Failed to trigger: ' + err.message);
       }
     }
 
@@ -285,10 +367,7 @@
       load();
     }
     async function renderPropertyList() {
-      const { data, error } = await sb
-        .from('competitor_properties')
-        .select('*')
-        .order('display_order', { ascending: true });
+      const { data, error } = await sb.from('competitor_properties').select('*').order('display_order', { ascending: true });
       if (error) { document.getElementById('propertyList').innerHTML = '<p class="text-rose-600 text-sm">' + error.message + '</p>'; return; }
       document.getElementById('propertyList').innerHTML = data.map(p => `
         <div class="flex items-center justify-between border border-slate-200 rounded p-3 ${p.is_wslr ? 'bg-emerald-50' : ''}">
@@ -315,6 +394,8 @@
           }
         });
       }
+      document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
+      document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
     });
     async function addProperty() {
       const url = document.getElementById('newUrl').value.trim();
@@ -322,49 +403,25 @@
       const msg = document.getElementById('adminMsg');
       msg.classList.remove('hidden');
       const slug = parseBookingUrl(url);
-      if (!slug) {
-        msg.className = 'text-sm mt-2 text-rose-600';
-        msg.textContent = "Couldn't extract a Booking.com slug from that URL. It should look like https://www.booking.com/hotel/au/some-hotel.html";
-        return;
-      }
-      if (!name) {
-        msg.className = 'text-sm mt-2 text-rose-600';
-        msg.textContent = 'Please enter a display name.';
-        return;
-      }
-      const { error } = await sb.from('competitor_properties').insert({
-        name, slug, booking_url: url, display_order: 100, active: true, is_wslr: false,
-      });
-      if (error) {
-        msg.className = 'text-sm mt-2 text-rose-600';
-        msg.textContent = error.message;
-      } else {
-        msg.className = 'text-sm mt-2 text-emerald-600';
-        msg.textContent = `Added "${name}". It will appear in next week's scrape.`;
-        document.getElementById('newUrl').value = '';
-        document.getElementById('newName').value = '';
-        renderPropertyList();
-      }
+      if (!slug) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = "Couldn't extract a Booking.com slug from that URL."; return; }
+      if (!name) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = 'Please enter a display name.'; return; }
+      const { error } = await sb.from('competitor_properties').insert({ name, slug, booking_url: url, display_order: 100, active: true, is_wslr: false });
+      if (error) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = error.message; }
+      else { msg.className = 'text-sm mt-2 text-emerald-600'; msg.textContent = `Added "${name}". Picked up in next scrape.`; document.getElementById('newUrl').value = ''; document.getElementById('newName').value = ''; renderPropertyList(); }
     }
     async function toggleActive(id, newActive) {
       const { error } = await sb.from('competitor_properties').update({ active: newActive, updated_at: new Date().toISOString() }).eq('id', id);
-      if (error) alert(error.message);
-      else renderPropertyList();
+      if (error) alert(error.message); else renderPropertyList();
     }
     async function deleteProperty(id, name) {
       if (!confirm(`Delete ${name}? Historical rates will be kept, but it'll no longer be scraped.`)) return;
       const { error } = await sb.from('competitor_properties').delete().eq('id', id);
-      if (error) alert(error.message);
-      else renderPropertyList();
+      if (error) alert(error.message); else renderPropertyList();
     }
 
     // ---------- Data ----------
     async function load() {
-      const { data: props, error: pErr } = await sb
-        .from('competitor_properties')
-        .select('*')
-        .eq('active', true)
-        .order('display_order', { ascending: true });
+      const { data: props, error: pErr } = await sb.from('competitor_properties').select('*').eq('active', true).order('display_order', { ascending: true });
       if (pErr) { document.getElementById('lastUpdated').textContent = 'Error loading properties: ' + pErr.message; return; }
       properties = props || [];
 
@@ -384,46 +441,52 @@
       render();
     }
 
-    // Build {date -> {property -> cheapestRow}} from latest scrape per (property, date)
+    function pickCheapest(rows) {
+      let best = null;
+      for (const r of rows) {
+        if (r.rate == null) { if (!best) best = r; continue; }
+        if (!best || best.rate == null || r.rate < best.rate) best = r;
+      }
+      return best;
+    }
+
     function buildDateMap() {
       if (cachedDateMap) return cachedDateMap;
-
-      const latestRunPerKey = {};
+      const byCell = {};
       for (const r of allRows) {
         const k = r.property + '|' + r.check_in;
-        if (!latestRunPerKey[k] || r.scraped_at > latestRunPerKey[k].scraped_at) {
-          latestRunPerKey[k] = { run: r.scrape_run_id, scraped_at: r.scraped_at };
-        }
+        if (!byCell[k]) byCell[k] = {};
+        if (!byCell[k][r.scrape_run_id]) byCell[k][r.scrape_run_id] = { scraped_at: r.scraped_at, rows: [] };
+        byCell[k][r.scrape_run_id].rows.push(r);
       }
-      const current = allRows.filter(r => {
-        const k = r.property + '|' + r.check_in;
-        return latestRunPerKey[k] && latestRunPerKey[k].run === r.scrape_run_id;
-      });
-      const cheapest = {};
-      for (const r of current) {
-        const k = r.property + '|' + r.check_in;
-        if (r.rate == null) { if (!cheapest[k]) cheapest[k] = r; continue; }
-        if (!cheapest[k] || cheapest[k].rate == null || r.rate < cheapest[k].rate) cheapest[k] = r;
-      }
+      const currentRows = [];
       const byDate = {};
-      for (const r of Object.values(cheapest)) {
-        if (!byDate[r.check_in]) byDate[r.check_in] = {
-          check_in: r.check_in, check_out: r.check_out,
-          stayType: r.notes?.match(/stay_type=(\w+)/)?.[1] || '',
-          props: {},
-        };
-        byDate[r.check_in].props[r.property] = r;
+      for (const k of Object.keys(byCell)) {
+        const runEntries = Object.entries(byCell[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
+        const latest = runEntries[0][1];
+        const previous = runEntries.length > 1 ? runEntries[1][1] : null;
+        const currCheapest = pickCheapest(latest.rows);
+        const prevCheapest = previous ? pickCheapest(previous.rows) : null;
+        if (!currCheapest) continue;
+        currentRows.push(currCheapest);
+        if (!byDate[currCheapest.check_in]) {
+          byDate[currCheapest.check_in] = {
+            check_in: currCheapest.check_in, check_out: currCheapest.check_out,
+            stayType: currCheapest.notes?.match(/stay_type=(\w+)/)?.[1] || '',
+            props: {},
+          };
+        }
+        byDate[currCheapest.check_in].props[currCheapest.property] = { ...currCheapest, prev: prevCheapest };
       }
       cachedDateMap = {
         allDates: Object.values(byDate).sort((a, b) => a.check_in.localeCompare(b.check_in)),
-        currentRows: current,
+        currentRows,
       };
       return cachedDateMap;
     }
 
     function render() {
       const { allDates, currentRows } = buildDateMap();
-
       renderHeader(currentRows);
       renderStats(allDates);
       renderTable(allDates);
@@ -462,10 +525,10 @@
       const compAvg = compCount ? compSum / compCount : null;
       const diff = (wslrAvg && compAvg) ? ((wslrAvg - compAvg) / compAvg * 100) : null;
       const cards = [
-        { label: 'WSLR avg (range)',     value: wslrAvg != null ? 'AU$' + Math.round(wslrAvg) : '—', sub: unit === 'perNight' ? 'per night' : 'stay total' },
+        { label: 'WSLR avg (range)', value: wslrAvg != null ? 'AU$' + Math.round(wslrAvg) : '—', sub: unit === 'perNight' ? 'per night' : 'stay total' },
         { label: 'Competitor avg (range)', value: compAvg != null ? 'AU$' + Math.round(compAvg) : '—', sub: 'across selected window' },
-        { label: 'WSLR vs competitors',  value: diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—', sub: diff != null && diff < 0 ? 'cheaper on avg' : 'more expensive', cls: diff != null && diff < 0 ? 'text-emerald-600' : 'text-rose-600' },
-        { label: 'Cheapest in market',   value: cheapest + '/' + total, sub: 'dates where WSLR wins' },
+        { label: 'WSLR vs competitors', value: diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—', sub: diff != null && diff < 0 ? 'cheaper on avg' : 'more expensive', cls: diff != null && diff < 0 ? 'text-emerald-600' : 'text-rose-600' },
+        { label: 'Cheapest in market', value: cheapest + '/' + total, sub: 'dates where WSLR wins' },
       ];
       document.getElementById('statCards').innerHTML = cards.map(c => `
         <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
@@ -502,7 +565,18 @@
             const reason = rec.room_name?.replace(/[()]/g, '') || 'unavailable';
             return `<td class="${cls}"><span class="na">${reason}</span></td>`;
           }
-          return `<td class="${cls}"><div class="font-semibold">${fmtAUD(displayed)}</div><div class="room" title="${rec.room_name}">${rec.room_name}</div></td>`;
+          let subAnnotation = '';
+          if (isSubstitution(rec)) {
+            const prevDisp = displayRate(rec.prev.rate, d.check_in, d.check_out);
+            const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 22 ? rec.prev.room_name.slice(0, 22) + '…' : (rec.prev.room_name || '');
+            const tooltip = 'Room type changed since previous scrape — cheaper room likely sold out. Previously: ' + (rec.prev.room_name || '') + ' at ' + fmtAUD(prevDisp);
+            subAnnotation = `<div class="substitution" title="${escAttr(tooltip)}">⚠ was ${fmtAUD(prevDisp)} (${prevRoomShort})</div>`;
+          }
+          return `<td class="${cls}">
+            <div class="font-semibold">${fmtAUD(displayed)}</div>
+            <div class="room" title="${escAttr(rec.room_name)}">${rec.room_name}</div>
+            ${subAnnotation}
+          </td>`;
         }).join('');
         return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
           <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
@@ -513,7 +587,6 @@
       t.innerHTML = `<thead><tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
         ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${h}</th>`).join('')}
       </tr></thead><tbody>${rows}</tbody>`;
-
       if (truncated) {
         note.classList.remove('hidden');
         note.textContent = `Showing first ${TABLE_CAP} of ${allDates.length} dates — see the Market view heatmap below for the full range.`;
@@ -532,7 +605,6 @@
       } else {
         chartNote.classList.add('hidden');
       }
-
       const ctx = document.getElementById('rateChart').getContext('2d');
       const labels = dates.map(d => fmtDate(d.check_in));
       const palette = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#0891b2', '#a855f7', '#14b8a6'];
@@ -556,49 +628,34 @@
       });
     }
 
-    // ---------- Market view ----------
     function calcLongRangeStats(allDates) {
       const wslr = wslrName();
       const compProps = properties.filter(p => !p.is_wslr);
       const soldOutCount = {};
       properties.forEach(p => soldOutCount[p.name] = 0);
-
       let wslrCheapest = 0, wslrMidMarket = 0, wslrMostExpensive = 0, wslrComparable = 0;
       const opportunityDates = [];
       const overpriceDates = [];
-
       for (const d of allDates) {
-        properties.forEach(p => {
-          const r = d.props[p.name];
-          if (!r || r.rate == null) soldOutCount[p.name]++;
-        });
-
+        properties.forEach(p => { const r = d.props[p.name]; if (!r || r.rate == null) soldOutCount[p.name]++; });
         const wslrR = d.props[wslr];
         if (!wslrR || wslrR.rate == null) continue;
-
-        const otherRates = compProps
-          .map(p => d.props[p.name])
-          .filter(r => r && r.rate != null)
-          .map(r => r.rate);
+        const otherRates = compProps.map(p => d.props[p.name]).filter(r => r && r.rate != null).map(r => r.rate);
         if (otherRates.length === 0) continue;
-
         wslrComparable++;
         const sortedOther = [...otherRates].sort((a, b) => a - b);
         const minOther = sortedOther[0];
         const maxOther = sortedOther[sortedOther.length - 1];
         const medianOther = sortedOther[Math.floor(sortedOther.length / 2)];
-
         if (wslrR.rate <= minOther) wslrCheapest++;
         else if (wslrR.rate >= maxOther) wslrMostExpensive++;
         else wslrMidMarket++;
-
         const deviation = (wslrR.rate - medianOther) / medianOther;
         if (deviation < -0.15) opportunityDates.push({ ...d, wslrRate: wslrR.rate, medianOther, deviation });
         if (deviation > 0.15) overpriceDates.push({ ...d, wslrRate: wslrR.rate, medianOther, deviation });
       }
       opportunityDates.sort((a, b) => a.deviation - b.deviation);
       overpriceDates.sort((a, b) => b.deviation - a.deviation);
-
       return { wslrCheapest, wslrMidMarket, wslrMostExpensive, wslrComparable, soldOutCount, opportunityDates, overpriceDates };
     }
 
@@ -607,9 +664,7 @@
       const wslr = wslrName();
       const compProps = properties.filter(p => !p.is_wslr);
       const pct = (n) => stats.wslrComparable ? Math.round(n / stats.wslrComparable * 100) : 0;
-
       const soldOutSummary = compProps.map(p => `${p.name.split(' ')[0]}: ${stats.soldOutCount[p.name] || 0}`).join(' · ');
-
       document.getElementById('longRangeStats').innerHTML = `
         <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           <div class="bg-emerald-50 rounded-lg border border-emerald-200 p-4">
@@ -639,10 +694,7 @@
     function getHeatmapColorFn(allDates, mode) {
       if (mode === 'absolute') {
         const rates = [];
-        allDates.forEach(d => properties.forEach(p => {
-          const r = d.props[p.name];
-          if (r && r.rate != null) rates.push(r.rate);
-        }));
+        allDates.forEach(d => properties.forEach(p => { const r = d.props[p.name]; if (r && r.rate != null) rates.push(r.rate); }));
         if (rates.length === 0) return () => '#f8fafc';
         const sorted = [...rates].sort((a, b) => a - b);
         const minR = sorted[Math.floor(sorted.length * 0.05)];
@@ -677,7 +729,6 @@
       const container = document.getElementById('monthChips');
       if (!container) return;
       if (allDates.length === 0) { container.innerHTML = ''; return; }
-
       const groups = [];
       let curMonth = null, curCount = 0, startIdx = 0;
       for (let i = 0; i < allDates.length; i++) {
@@ -689,7 +740,6 @@
         } else curCount++;
       }
       if (curMonth !== null) groups.push({ key: curMonth, count: curCount, startIdx });
-
       container.innerHTML = groups.map(g => {
         const [y, m] = g.key.split('-').map(Number);
         const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
@@ -710,7 +760,6 @@
       }
       const mode = document.getElementById('heatmapMode').value;
       const getColor = getHeatmapColorFn(allDates, mode);
-
       const monthGroups = [];
       let curMonth = null, curCount = 0;
       for (const d of allDates) {
@@ -722,66 +771,60 @@
         } else curCount++;
       }
       if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
-
       const monthLabels = monthGroups.map(g => {
         const [y, m] = g.key.split('-').map(Number);
         const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
         return `<div class="month-label" style="width: ${g.count * 18}px">${name}</div>`;
       }).join('');
-
       const dayLabels = allDates.map(d => {
         const dt = new Date(d.check_in + 'T00:00:00');
         const dow = dt.getDay();
         const isWeekend = dow === 5 || dow === 6;
         return `<div class="day-label ${isWeekend ? 'weekend' : ''}">${dt.getDate()}</div>`;
       }).join('');
-
       const propRows = properties.map(p => {
         const cells = allDates.map(d => {
           const r = d.props[p.name];
-          if (!r) return `<div class="heat-cell empty" title="${p.name} ${d.check_in}: no data"></div>`;
-          if (r.rate == null) return `<div class="heat-cell sold-out" title="${p.name} ${d.check_in}: sold out (${r.room_name || ''})"></div>`;
+          if (!r) return `<div class="heat-cell empty" title="${escAttr(p.name + ' ' + d.check_in + ': no data')}"></div>`;
+          if (r.rate == null) return `<div class="heat-cell sold-out" title="${escAttr(p.name + ' ' + d.check_in + ': sold out (' + (r.room_name || '') + ')')}"></div>`;
           const color = getColor(r.rate, d.check_in);
-          return `<div class="heat-cell" style="background: ${color}" title="${p.name} ${fmtDate(d.check_in)}: AU$${Math.round(r.rate)}/n — ${r.room_name || ''}"></div>`;
+          const sub = isSubstitution(r);
+          let title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
+          if (sub) title += ' ⚠ SUBSTITUTION — was AU$' + Math.round(r.prev.rate) + ' (' + r.prev.room_name + ')';
+          const cellCls = 'heat-cell' + (sub ? ' substitution' : '');
+          return `<div class="${cellCls}" style="background: ${color}" title="${escAttr(title)}"></div>`;
         }).join('');
         return `<div class="heat-row">
           <div class="row-label ${p.is_wslr ? 'wslr' : ''}">${p.name}${p.is_wslr ? ' (us)' : ''}</div>
           <div class="cells-container">${cells}</div>
         </div>`;
       }).join('');
-
       document.getElementById('heatmapContainer').innerHTML = `
         <div class="heatmap-scroll border border-slate-200">
           <div class="heatmap-inner">
-            <div class="heat-row header-row">
-              <div class="row-label"></div>
-              <div class="cells-container">${monthLabels}</div>
-            </div>
-            <div class="heat-row header-row">
-              <div class="row-label"></div>
-              <div class="cells-container">${dayLabels}</div>
-            </div>
+            <div class="heat-row header-row"><div class="row-label"></div><div class="cells-container">${monthLabels}</div></div>
+            <div class="heat-row header-row"><div class="row-label"></div><div class="cells-container">${dayLabels}</div></div>
             ${propRows}
           </div>
         </div>
       `;
-
       const legendHtml = mode === 'absolute'
         ? `<span class="legend-swatch" style="background:hsl(130,65%,55%)"></span>cheaper
            <span class="legend-swatch ml-3" style="background:hsl(65,65%,55%)"></span>mid
            <span class="legend-swatch ml-3" style="background:hsl(0,65%,55%)"></span>expensive
-           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out`
+           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`
         : `<span class="legend-swatch" style="background:hsl(130,60%,50%)"></span>cheaper than market
            <span class="legend-swatch ml-3" style="background:hsl(0,0%,60%)"></span>at market
            <span class="legend-swatch ml-3" style="background:hsl(0,60%,50%)"></span>above market
-           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out`;
+           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`;
       document.getElementById('heatmapLegend').innerHTML = legendHtml;
     }
 
     function renderInsights(allDates) {
       const stats = calcLongRangeStats(allDates);
       const top = (arr, n) => arr.slice(0, n);
-
       const fmtItem = (d, color, sign) => `
         <div class="flex justify-between text-sm py-2 border-b border-slate-100">
           <div>
@@ -794,22 +837,20 @@
           </div>
         </div>
       `;
-
       const oppList = top(stats.opportunityDates, 8).map(d => fmtItem(d, 'text-emerald-700', '')).join('')
         || '<p class="text-sm text-slate-500 py-3">No dates where WSLR is significantly cheaper than market.</p>';
       const overList = top(stats.overpriceDates, 8).map(d => fmtItem(d, 'text-rose-700', '+')).join('')
         || '<p class="text-sm text-slate-500 py-3">No dates where WSLR is significantly above market.</p>';
-
       document.getElementById('insightsContainer').innerHTML = `
         <div class="grid md:grid-cols-2 gap-6">
           <div>
             <h4 class="font-semibold text-sm mb-1 text-emerald-700">Possible rate-rise candidates</h4>
-            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% below the market median — competitors might be capturing demand we're underpricing.</p>
+            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% below the market median.</p>
             <div class="border border-slate-200 rounded p-3 bg-slate-50">${oppList}</div>
           </div>
           <div>
             <h4 class="font-semibold text-sm mb-1 text-rose-700">Possible overpricing</h4>
-            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% above the market median — we may be losing bookings to cheaper competitors.</p>
+            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% above the market median.</p>
             <div class="border border-slate-200 rounded p-3 bg-slate-50">${overList}</div>
           </div>
         </div>
@@ -838,7 +879,6 @@
       applyRange(rangeStartDate, new Date(e.target.value + 'T00:00:00'));
     });
 
-    // Initial load — sets default range + fetches data
     setRangePreset('next30');
   </script>
 </body>
