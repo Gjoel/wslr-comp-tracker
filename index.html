@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WSLR Competitor Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+    .wslr-row { background-color: #ecfdf5; }
+    .cheapest { background-color: #d1fae5; }
+    .most-expensive { color: #b91c1c; }
+    .na { color: #9ca3af; font-style: italic; }
+    .rate-cell .room { font-size: 11px; color: #64748b; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .modal-backdrop { background: rgba(15, 23, 42, 0.4); }
+
+    /* Heatmap */
+    .heatmap-scroll { overflow-x: auto; border-radius: 8px; scroll-behavior: smooth; }
+    .heatmap-inner { display: inline-block; min-width: 100%; }
+    .heat-row { display: flex; align-items: stretch; }
+    .heat-row .row-label {
+      width: 180px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; font-weight: 500;
+      position: sticky; left: 0; background: white; z-index: 2;
+      border-right: 1px solid #e2e8f0; display: flex; align-items: center;
+    }
+    .heat-row .row-label.wslr { background: #ecfdf5; }
+    .heat-row .cells-container { display: flex; flex-wrap: nowrap; }
+    .heat-cell {
+      width: 18px; height: 30px; flex-shrink: 0;
+      border-right: 1px solid white; cursor: default; position: relative;
+    }
+    .heat-cell.empty { background: #f8fafc; }
+    .heat-cell.sold-out { background: #1e293b; }
+    .heat-cell.sold-out::after {
+      content: '×'; color: rgba(255,255,255,0.6);
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px;
+    }
+    .heat-cell:hover { outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
+    .header-row .row-label { background: white; }
+    .month-label {
+      height: 22px; font-size: 11px; font-weight: 600; color: #475569;
+      display: flex; align-items: center; justify-content: flex-start; padding-left: 4px;
+      border-right: 1px solid #e2e8f0; text-transform: uppercase; flex-shrink: 0;
+    }
+    .day-label {
+      width: 18px; height: 20px; font-size: 9px; color: #94a3b8;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      border-right: 1px solid white;
+    }
+    .day-label.weekend { color: #0f172a; font-weight: 600; background: #f1f5f9; }
+    .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen">
+  <div class="max-w-7xl mx-auto p-6">
+
+    <header class="mb-6 flex items-start justify-between flex-wrap gap-4">
+      <div>
+        <h1 class="text-3xl font-bold tracking-tight">WSLR Competitor Tracker</h1>
+        <p class="text-sm text-slate-500 mt-1" id="lastUpdated">Loading…</p>
+      </div>
+      <div class="flex gap-2 items-center flex-wrap">
+        <button id="btnPerNight" class="px-4 py-2 rounded-md font-medium text-sm bg-slate-900 text-white">Per night</button>
+        <button id="btnTotal"    class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700">Stay total</button>
+        <button onclick="openAdmin()" class="px-4 py-2 rounded-md font-medium text-sm bg-emerald-600 text-white">Manage properties</button>
+        <button id="btnRunScrape" onclick="runScrape()" class="px-4 py-2 rounded-md font-medium text-sm bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200">Run scrape</button>
+      </div>
+    </header>
+
+    <!-- Date range picker -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
+      <div class="flex items-center gap-2">
+        <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
+        <input type="date" id="rangeStart" class="text-sm border border-slate-300 rounded px-2 py-1">
+        <span class="text-slate-400 text-sm">to</span>
+        <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
+      </div>
+      <div class="flex flex-wrap gap-1">
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
+      </div>
+    </div>
+
+    <!-- Stat cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
+
+    <!-- Snapshot table -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Date snapshot</h2>
+        <p class="text-sm text-slate-500 mt-1">Cheapest room per property per date. Room name shown beneath each rate.</p>
+      </div>
+      <div class="overflow-x-auto p-6">
+        <table class="w-full text-sm" id="snapshotTable"></table>
+        <p id="snapshotNote" class="text-xs text-slate-400 mt-3 hidden"></p>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Rate comparison by date</h2>
+        <p id="chartNote" class="text-sm text-slate-500 mt-1 hidden"></p>
+      </div>
+      <div class="p-6">
+        <canvas id="rateChart" height="120"></canvas>
+      </div>
+    </div>
+
+    <!-- Market view (heatmap) -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Market view</h2>
+        <p class="text-sm text-slate-500 mt-1">Pricing patterns across all tracked properties for the selected range.</p>
+      </div>
+      <div class="p-6">
+        <div id="longRangeStats"></div>
+
+        <div class="flex items-center justify-between mb-3 mt-2 flex-wrap gap-3">
+          <div>
+            <label class="text-xs uppercase tracking-wide text-slate-500 mr-2">Colour by</label>
+            <select id="heatmapMode" class="text-sm border border-slate-300 rounded px-2 py-1">
+              <option value="absolute">Absolute rate</option>
+              <option value="vsMedian">Deviation from market median</option>
+            </select>
+          </div>
+          <div class="text-xs text-slate-500" id="heatmapLegend"></div>
+        </div>
+
+        <div id="monthChips" class="flex flex-wrap gap-1.5 mb-3"></div>
+
+        <div id="heatmapContainer"></div>
+
+        <div id="insightsContainer" class="mt-8"></div>
+      </div>
+    </div>
+
+    <footer class="text-center text-xs text-slate-400 mt-8 pb-8">
+      Data scraped weekly from booking.com · WSLR internal tool
+    </footer>
+  </div>
+
+  <!-- Admin modal -->
+  <div id="adminModal" class="fixed inset-0 modal-backdrop hidden items-center justify-center z-50 overflow-y-auto py-8">
+    <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full p-6 m-4">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-semibold">Manage properties</h3>
+        <button onclick="closeAdmin()" class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+      </div>
+
+      <div class="mb-6 p-4 bg-slate-50 rounded border border-slate-200">
+        <h4 class="font-medium mb-2 text-sm">Add a new property</h4>
+        <div class="flex flex-col gap-2">
+          <input id="newUrl" type="text" placeholder="Paste Booking.com URL (e.g. https://www.booking.com/hotel/au/some-hotel.html)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+          <input id="newName" type="text" placeholder="Display name (auto-filled from URL, you can edit)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+          <div class="flex justify-end">
+            <button onclick="addProperty()" class="px-4 py-2 rounded bg-slate-900 text-white text-sm font-medium">Add property</button>
+          </div>
+        </div>
+        <div id="adminMsg" class="text-sm mt-2 hidden"></div>
+      </div>
+
+      <h4 class="font-medium mb-2 text-sm">Current properties</h4>
+      <div id="propertyList" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <script>
+    // ====== CONFIG (injected by GitHub Actions at deploy time) ======
+    const SUPABASE_URL = '__SUPABASE_URL__';
+    const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
+    // The Apps Script web app URL — hardcoded because re-deploying to the same
+    // deployment keeps the URL stable. If it ever changes, update this one line.
+    const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
+    // ================================================================
+
+    const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    let unit = 'perNight';
+    let rangeStartDate = null;
+    let rangeEndDate = null;
+    let allRows = [];
+    let properties = [];
+    let chart = null;
+    let cachedDateMap = null;
+    const TABLE_CAP = 30;
+    const CHART_CAP = 30;
+
+    // ---------- Helpers ----------
+    function fmtAUD(n) { if (n == null) return '<span class="na">—</span>'; return 'AU$' + Math.round(n); }
+    function fmtDate(s) {
+      const d = new Date(s + 'T00:00:00');
+      return d.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+    }
+    function fmtYMD(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    function nightsBetween(checkIn, checkOut) { return (new Date(checkOut) - new Date(checkIn)) / 86400000; }
+    function displayRate(perNightRate, checkIn, checkOut) {
+      if (perNightRate == null) return null;
+      if (unit === 'perNight') return perNightRate;
+      return perNightRate * nightsBetween(checkIn, checkOut);
+    }
+    function parseBookingUrl(url) {
+      const m = (url || '').match(/booking\.com\/hotel\/[a-z]{2}\/([a-z0-9\-]+)\./i);
+      return m ? m[1] : null;
+    }
+    function wslrName() { const w = properties.find(p => p.is_wslr); return w ? w.name : null; }
+
+    // ---------- Date range ----------
+    function setRangePreset(preset) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      let start = new Date(today);
+      let end   = new Date(today);
+      if      (preset === 'next30')   { end.setDate(today.getDate() + 30); }
+      else if (preset === 'next90')   { end.setDate(today.getDate() + 90); }
+      else if (preset === 'upcoming') { end.setDate(today.getDate() + 200); }
+      else if (preset === 'past30')   { start.setDate(today.getDate() - 30); }
+      else if (preset === 'past90')   { start.setDate(today.getDate() - 90); }
+      applyRange(start, end);
+    }
+    function applyRange(start, end) {
+      if (!start || !end) return;
+      if (start > end) { alert('Start date must be before end date.'); return; }
+      rangeStartDate = start;
+      rangeEndDate = end;
+      document.getElementById('rangeStart').value = fmtYMD(start);
+      document.getElementById('rangeEnd').value = fmtYMD(end);
+      cachedDateMap = null;
+      load();
+    }
+
+    // ---------- Run scrape ----------
+    async function runScrape() {
+      if (!confirm('Trigger a scrape now? It runs in the background for ~30–60 minutes. You\'ll get the digest email when it finishes.')) return;
+      const btn = document.getElementById('btnRunScrape');
+      const originalHTML = btn.innerHTML;
+      btn.innerHTML = 'Triggering…';
+      btn.disabled = true;
+
+      try {
+        // Use text/plain to avoid CORS preflight issues with Apps Script; the script parses JSON.parse on the body anyway.
+        const res = await fetch(APPS_SCRIPT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({ action: 'trigger_scrape' }),
+          redirect: 'follow',
+        });
+        const data = await res.json();
+        if (data.ok) {
+          btn.innerHTML = '✓ Triggered';
+          alert('Scrape triggered. Watch progress on the GitHub Actions tab; you\'ll get the digest email when it finishes.');
+          setTimeout(() => { btn.innerHTML = originalHTML; btn.disabled = false; }, 5000);
+        } else {
+          btn.innerHTML = originalHTML;
+          btn.disabled = false;
+          alert('Failed to trigger: ' + (data.error || 'unknown error'));
+        }
+      } catch (err) {
+        btn.innerHTML = originalHTML;
+        btn.disabled = false;
+        alert('Failed to trigger: ' + err.message);
+      }
+    }
+
+    // ---------- Admin ----------
+    async function openAdmin() {
+      document.getElementById('adminModal').classList.remove('hidden');
+      document.getElementById('adminModal').classList.add('flex');
+      await renderPropertyList();
+    }
+    function closeAdmin() {
+      document.getElementById('adminModal').classList.add('hidden');
+      document.getElementById('adminModal').classList.remove('flex');
+      load();
+    }
+    async function renderPropertyList() {
+      const { data, error } = await sb
+        .from('competitor_properties')
+        .select('*')
+        .order('display_order', { ascending: true });
+      if (error) { document.getElementById('propertyList').innerHTML = '<p class="text-rose-600 text-sm">' + error.message + '</p>'; return; }
+      document.getElementById('propertyList').innerHTML = data.map(p => `
+        <div class="flex items-center justify-between border border-slate-200 rounded p-3 ${p.is_wslr ? 'bg-emerald-50' : ''}">
+          <div class="flex-1">
+            <div class="font-medium text-sm">${p.name} ${p.is_wslr ? '<span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
+            <div class="text-xs text-slate-500">${p.slug}</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs ${p.active ? 'text-emerald-700' : 'text-slate-400'}">${p.active ? 'Active' : 'Paused'}</span>
+            <button onclick="toggleActive(${p.id}, ${!p.active})" class="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-100">${p.active ? 'Pause' : 'Resume'}</button>
+            ${p.is_wslr ? '' : `<button onclick="deleteProperty(${p.id}, '${p.name.replace(/'/g, "\\'")}')" class="text-xs px-2 py-1 rounded border border-rose-300 text-rose-600 hover:bg-rose-50">Delete</button>`}
+          </div>
+        </div>
+      `).join('');
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      const urlInput = document.getElementById('newUrl');
+      const nameInput = document.getElementById('newName');
+      if (urlInput) {
+        urlInput.addEventListener('input', () => {
+          const slug = parseBookingUrl(urlInput.value);
+          if (slug && !nameInput.value) {
+            nameInput.value = slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          }
+        });
+      }
+    });
+    async function addProperty() {
+      const url = document.getElementById('newUrl').value.trim();
+      const name = document.getElementById('newName').value.trim();
+      const msg = document.getElementById('adminMsg');
+      msg.classList.remove('hidden');
+      const slug = parseBookingUrl(url);
+      if (!slug) {
+        msg.className = 'text-sm mt-2 text-rose-600';
+        msg.textContent = "Couldn't extract a Booking.com slug from that URL. It should look like https://www.booking.com/hotel/au/some-hotel.html";
+        return;
+      }
+      if (!name) {
+        msg.className = 'text-sm mt-2 text-rose-600';
+        msg.textContent = 'Please enter a display name.';
+        return;
+      }
+      const { error } = await sb.from('competitor_properties').insert({
+        name, slug, booking_url: url, display_order: 100, active: true, is_wslr: false,
+      });
+      if (error) {
+        msg.className = 'text-sm mt-2 text-rose-600';
+        msg.textContent = error.message;
+      } else {
+        msg.className = 'text-sm mt-2 text-emerald-600';
+        msg.textContent = `Added "${name}". It will appear in next week's scrape.`;
+        document.getElementById('newUrl').value = '';
+        document.getElementById('newName').value = '';
+        renderPropertyList();
+      }
+    }
+    async function toggleActive(id, newActive) {
+      const { error } = await sb.from('competitor_properties').update({ active: newActive, updated_at: new Date().toISOString() }).eq('id', id);
+      if (error) alert(error.message);
+      else renderPropertyList();
+    }
+    async function deleteProperty(id, name) {
+      if (!confirm(`Delete ${name}? Historical rates will be kept, but it'll no longer be scraped.`)) return;
+      const { error } = await sb.from('competitor_properties').delete().eq('id', id);
+      if (error) alert(error.message);
+      else renderPropertyList();
+    }
+
+    // ---------- Data ----------
+    async function load() {
+      const { data: props, error: pErr } = await sb
+        .from('competitor_properties')
+        .select('*')
+        .eq('active', true)
+        .order('display_order', { ascending: true });
+      if (pErr) { document.getElementById('lastUpdated').textContent = 'Error loading properties: ' + pErr.message; return; }
+      properties = props || [];
+
+      const startStr = fmtYMD(rangeStartDate);
+      const endStr   = fmtYMD(rangeEndDate);
+      const { data, error } = await sb
+        .from('competitor_room_rates')
+        .select('*')
+        .gte('check_in', startStr)
+        .lte('check_in', endStr)
+        .order('check_in', { ascending: true })
+        .limit(50000);
+      if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
+      if (data && data.length >= 50000) console.warn('Hit 50K row limit — data may be truncated');
+      allRows = data || [];
+      cachedDateMap = null;
+      render();
+    }
+
+    // Build {date -> {property -> cheapestRow}} from latest scrape per (property, date)
+    function buildDateMap() {
+      if (cachedDateMap) return cachedDateMap;
+
+      const latestRunPerKey = {};
+      for (const r of allRows) {
+        const k = r.property + '|' + r.check_in;
+        if (!latestRunPerKey[k] || r.scraped_at > latestRunPerKey[k].scraped_at) {
+          latestRunPerKey[k] = { run: r.scrape_run_id, scraped_at: r.scraped_at };
+        }
+      }
+      const current = allRows.filter(r => {
+        const k = r.property + '|' + r.check_in;
+        return latestRunPerKey[k] && latestRunPerKey[k].run === r.scrape_run_id;
+      });
+      const cheapest = {};
+      for (const r of current) {
+        const k = r.property + '|' + r.check_in;
+        if (r.rate == null) { if (!cheapest[k]) cheapest[k] = r; continue; }
+        if (!cheapest[k] || cheapest[k].rate == null || r.rate < cheapest[k].rate) cheapest[k] = r;
+      }
+      const byDate = {};
+      for (const r of Object.values(cheapest)) {
+        if (!byDate[r.check_in]) byDate[r.check_in] = {
+          check_in: r.check_in, check_out: r.check_out,
+          stayType: r.notes?.match(/stay_type=(\w+)/)?.[1] || '',
+          props: {},
+        };
+        byDate[r.check_in].props[r.property] = r;
+      }
+      cachedDateMap = {
+        allDates: Object.values(byDate).sort((a, b) => a.check_in.localeCompare(b.check_in)),
+        currentRows: current,
+      };
+      return cachedDateMap;
+    }
+
+    function render() {
+      const { allDates, currentRows } = buildDateMap();
+
+      renderHeader(currentRows);
+      renderStats(allDates);
+      renderTable(allDates);
+      renderChart(allDates);
+      renderLongRangeStats(allDates);
+      renderMonthChips(allDates);
+      renderHeatmap(allDates);
+      renderInsights(allDates);
+    }
+
+    function renderHeader(rows) {
+      if (!rows || rows.length === 0) {
+        document.getElementById('lastUpdated').textContent = 'No data in this range. Try a different window or trigger a scrape.';
+        return;
+      }
+      const latestScrape = rows.reduce((max, r) => r.scraped_at > max ? r.scraped_at : max, rows[0].scraped_at);
+      const d = new Date(latestScrape);
+      document.getElementById('lastUpdated').textContent = 'Last scrape: ' + d.toLocaleString('en-AU', { dateStyle: 'medium', timeStyle: 'short' });
+    }
+
+    function renderStats(dates) {
+      const wslr = wslrName();
+      let cheapest = 0, total = 0, wslrSum = 0, wslrCount = 0, compSum = 0, compCount = 0;
+      for (const d of dates) {
+        const w = d.props[wslr];
+        const others = properties.filter(p => !p.is_wslr).map(p => d.props[p.name]).filter(r => r && r.rate != null);
+        if (!w || w.rate == null) continue;
+        total++;
+        const wv = displayRate(w.rate, d.check_in, d.check_out);
+        wslrSum += wv; wslrCount++;
+        const otherRates = others.map(r => displayRate(r.rate, d.check_in, d.check_out));
+        otherRates.forEach(r => { compSum += r; compCount++; });
+        if (otherRates.every(r => wv < r) && otherRates.length > 0) cheapest++;
+      }
+      const wslrAvg = wslrCount ? wslrSum / wslrCount : null;
+      const compAvg = compCount ? compSum / compCount : null;
+      const diff = (wslrAvg && compAvg) ? ((wslrAvg - compAvg) / compAvg * 100) : null;
+      const cards = [
+        { label: 'WSLR avg (range)',     value: wslrAvg != null ? 'AU$' + Math.round(wslrAvg) : '—', sub: unit === 'perNight' ? 'per night' : 'stay total' },
+        { label: 'Competitor avg (range)', value: compAvg != null ? 'AU$' + Math.round(compAvg) : '—', sub: 'across selected window' },
+        { label: 'WSLR vs competitors',  value: diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—', sub: diff != null && diff < 0 ? 'cheaper on avg' : 'more expensive', cls: diff != null && diff < 0 ? 'text-emerald-600' : 'text-rose-600' },
+        { label: 'Cheapest in market',   value: cheapest + '/' + total, sub: 'dates where WSLR wins' },
+      ];
+      document.getElementById('statCards').innerHTML = cards.map(c => `
+        <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4">
+          <div class="text-xs uppercase tracking-wide text-slate-500">${c.label}</div>
+          <div class="text-2xl font-bold mt-2 ${c.cls || ''}">${c.value}</div>
+          <div class="text-xs text-slate-500 mt-1">${c.sub}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderTable(allDates) {
+      const visible = allDates.slice(0, TABLE_CAP);
+      const truncated = allDates.length > TABLE_CAP;
+      const wslr = wslrName();
+      const t = document.getElementById('snapshotTable');
+      const note = document.getElementById('snapshotNote');
+      const headers = ['Date', 'Stay', ...properties.map(p => p.name)];
+      const rows = visible.map(d => {
+        const ratesForRow = properties.map(p => {
+          const r = d.props[p.name];
+          return { prop: p, rec: r, displayed: r ? displayRate(r.rate, d.check_in, d.check_out) : null };
+        });
+        const valid = ratesForRow.filter(x => x.displayed != null).map(x => x.displayed);
+        const min = valid.length ? Math.min(...valid) : null;
+        const max = valid.length ? Math.max(...valid) : null;
+        const cells = ratesForRow.map(({ prop, rec, displayed }) => {
+          let cls = 'rate-cell text-right py-2 px-3 align-top';
+          if (displayed != null && valid.length > 1) {
+            if (displayed === min) cls += ' cheapest';
+            else if (displayed === max) cls += ' most-expensive';
+          }
+          if (!rec) return `<td class="${cls}">${fmtAUD(null)}</td>`;
+          if (rec.rate == null) {
+            const reason = rec.room_name?.replace(/[()]/g, '') || 'unavailable';
+            return `<td class="${cls}"><span class="na">${reason}</span></td>`;
+          }
+          return `<td class="${cls}"><div class="font-semibold">${fmtAUD(displayed)}</div><div class="room" title="${rec.room_name}">${rec.room_name}</div></td>`;
+        }).join('');
+        return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
+          <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
+          <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType}</td>
+          ${cells}
+        </tr>`;
+      }).join('');
+      t.innerHTML = `<thead><tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
+        ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${h}</th>`).join('')}
+      </tr></thead><tbody>${rows}</tbody>`;
+
+      if (truncated) {
+        note.classList.remove('hidden');
+        note.textContent = `Showing first ${TABLE_CAP} of ${allDates.length} dates — see the Market view heatmap below for the full range.`;
+      } else {
+        note.classList.add('hidden');
+      }
+    }
+
+    function renderChart(allDates) {
+      const dates = allDates.slice(0, CHART_CAP);
+      const truncated = allDates.length > CHART_CAP;
+      const chartNote = document.getElementById('chartNote');
+      if (truncated) {
+        chartNote.classList.remove('hidden');
+        chartNote.textContent = `Chart shows the first ${CHART_CAP} dates of ${allDates.length} in range.`;
+      } else {
+        chartNote.classList.add('hidden');
+      }
+
+      const ctx = document.getElementById('rateChart').getContext('2d');
+      const labels = dates.map(d => fmtDate(d.check_in));
+      const palette = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#0891b2', '#a855f7', '#14b8a6'];
+      const datasets = properties.map((p, i) => ({
+        label: p.name,
+        data: dates.map(d => { const r = d.props[p.name]; return r ? displayRate(r.rate, d.check_in, d.check_out) : null; }),
+        backgroundColor: palette[i % palette.length],
+        borderRadius: 4,
+      }));
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'bar', data: { labels, datasets },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'bottom' },
+            tooltip: { callbacks: { label: c => c.dataset.label + ': AU$' + (c.parsed.y != null ? Math.round(c.parsed.y) : '—') } },
+          },
+          scales: { y: { beginAtZero: false, ticks: { callback: v => 'AU$' + v } } },
+        },
+      });
+    }
+
+    // ---------- Market view ----------
+    function calcLongRangeStats(allDates) {
+      const wslr = wslrName();
+      const compProps = properties.filter(p => !p.is_wslr);
+      const soldOutCount = {};
+      properties.forEach(p => soldOutCount[p.name] = 0);
+
+      let wslrCheapest = 0, wslrMidMarket = 0, wslrMostExpensive = 0, wslrComparable = 0;
+      const opportunityDates = [];
+      const overpriceDates = [];
+
+      for (const d of allDates) {
+        properties.forEach(p => {
+          const r = d.props[p.name];
+          if (!r || r.rate == null) soldOutCount[p.name]++;
+        });
+
+        const wslrR = d.props[wslr];
+        if (!wslrR || wslrR.rate == null) continue;
+
+        const otherRates = compProps
+          .map(p => d.props[p.name])
+          .filter(r => r && r.rate != null)
+          .map(r => r.rate);
+        if (otherRates.length === 0) continue;
+
+        wslrComparable++;
+        const sortedOther = [...otherRates].sort((a, b) => a - b);
+        const minOther = sortedOther[0];
+        const maxOther = sortedOther[sortedOther.length - 1];
+        const medianOther = sortedOther[Math.floor(sortedOther.length / 2)];
+
+        if (wslrR.rate <= minOther) wslrCheapest++;
+        else if (wslrR.rate >= maxOther) wslrMostExpensive++;
+        else wslrMidMarket++;
+
+        const deviation = (wslrR.rate - medianOther) / medianOther;
+        if (deviation < -0.15) opportunityDates.push({ ...d, wslrRate: wslrR.rate, medianOther, deviation });
+        if (deviation > 0.15) overpriceDates.push({ ...d, wslrRate: wslrR.rate, medianOther, deviation });
+      }
+      opportunityDates.sort((a, b) => a.deviation - b.deviation);
+      overpriceDates.sort((a, b) => b.deviation - a.deviation);
+
+      return { wslrCheapest, wslrMidMarket, wslrMostExpensive, wslrComparable, soldOutCount, opportunityDates, overpriceDates };
+    }
+
+    function renderLongRangeStats(allDates) {
+      const stats = calcLongRangeStats(allDates);
+      const wslr = wslrName();
+      const compProps = properties.filter(p => !p.is_wslr);
+      const pct = (n) => stats.wslrComparable ? Math.round(n / stats.wslrComparable * 100) : 0;
+
+      const soldOutSummary = compProps.map(p => `${p.name.split(' ')[0]}: ${stats.soldOutCount[p.name] || 0}`).join(' · ');
+
+      document.getElementById('longRangeStats').innerHTML = `
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          <div class="bg-emerald-50 rounded-lg border border-emerald-200 p-4">
+            <div class="text-xs uppercase tracking-wide text-emerald-700">WSLR cheapest</div>
+            <div class="text-2xl font-bold mt-2 text-emerald-700">${pct(stats.wslrCheapest)}%</div>
+            <div class="text-xs text-slate-600 mt-1">${stats.wslrCheapest} of ${stats.wslrComparable} comparable dates</div>
+          </div>
+          <div class="bg-white rounded-lg border border-slate-200 p-4">
+            <div class="text-xs uppercase tracking-wide text-slate-500">WSLR mid-market</div>
+            <div class="text-2xl font-bold mt-2 text-slate-700">${pct(stats.wslrMidMarket)}%</div>
+            <div class="text-xs text-slate-500 mt-1">${stats.wslrMidMarket} dates between competitors</div>
+          </div>
+          <div class="bg-rose-50 rounded-lg border border-rose-200 p-4">
+            <div class="text-xs uppercase tracking-wide text-rose-700">WSLR priciest</div>
+            <div class="text-2xl font-bold mt-2 text-rose-700">${pct(stats.wslrMostExpensive)}%</div>
+            <div class="text-xs text-slate-600 mt-1">${stats.wslrMostExpensive} dates above all competitors</div>
+          </div>
+          <div class="bg-slate-100 rounded-lg border border-slate-200 p-4">
+            <div class="text-xs uppercase tracking-wide text-slate-600">Sold out nights</div>
+            <div class="text-2xl font-bold mt-2">${stats.soldOutCount[wslr] || 0}<span class="text-sm font-normal text-slate-500"> (WSLR)</span></div>
+            <div class="text-xs text-slate-500 mt-1">${soldOutSummary}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function getHeatmapColorFn(allDates, mode) {
+      if (mode === 'absolute') {
+        const rates = [];
+        allDates.forEach(d => properties.forEach(p => {
+          const r = d.props[p.name];
+          if (r && r.rate != null) rates.push(r.rate);
+        }));
+        if (rates.length === 0) return () => '#f8fafc';
+        const sorted = [...rates].sort((a, b) => a - b);
+        const minR = sorted[Math.floor(sorted.length * 0.05)];
+        const maxR = sorted[Math.floor(sorted.length * 0.95)];
+        return (rate) => {
+          if (rate == null) return null;
+          const t = Math.max(0, Math.min(1, (rate - minR) / Math.max(1, maxR - minR)));
+          const hue = 130 - t * 130;
+          return `hsl(${hue}, 65%, 55%)`;
+        };
+      } else {
+        const medianByDate = {};
+        allDates.forEach(d => {
+          const r = properties.map(p => d.props[p.name]).filter(x => x && x.rate != null).map(x => x.rate).sort((a, b) => a - b);
+          if (r.length > 0) medianByDate[d.check_in] = r[Math.floor(r.length / 2)];
+        });
+        return (rate, dateStr) => {
+          if (rate == null) return null;
+          const med = medianByDate[dateStr];
+          if (!med) return '#e2e8f0';
+          const dev = (rate - med) / med;
+          const t = Math.max(-0.4, Math.min(0.4, dev)) / 0.4;
+          const hue = t < 0 ? 130 : 0;
+          const sat = Math.abs(t) * 60 + 20;
+          const light = 60 - Math.abs(t) * 10;
+          return `hsl(${hue}, ${sat}%, ${light}%)`;
+        };
+      }
+    }
+
+    function renderMonthChips(allDates) {
+      const container = document.getElementById('monthChips');
+      if (!container) return;
+      if (allDates.length === 0) { container.innerHTML = ''; return; }
+
+      const groups = [];
+      let curMonth = null, curCount = 0, startIdx = 0;
+      for (let i = 0; i < allDates.length; i++) {
+        const dt = new Date(allDates[i].check_in + 'T00:00:00');
+        const key = dt.getFullYear() + '-' + dt.getMonth();
+        if (key !== curMonth) {
+          if (curMonth !== null) groups.push({ key: curMonth, count: curCount, startIdx });
+          curMonth = key; curCount = 1; startIdx = i;
+        } else curCount++;
+      }
+      if (curMonth !== null) groups.push({ key: curMonth, count: curCount, startIdx });
+
+      container.innerHTML = groups.map(g => {
+        const [y, m] = g.key.split('-').map(Number);
+        const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
+        return `<button onclick="scrollHeatmapToDay(${g.startIdx})" class="px-2.5 py-1 text-xs rounded border border-slate-300 bg-white hover:bg-slate-100 font-medium text-slate-700">${name}</button>`;
+      }).join('');
+    }
+
+    function scrollHeatmapToDay(dayIdx) {
+      const scroller = document.querySelector('.heatmap-scroll');
+      if (scroller) scroller.scrollTo({ left: dayIdx * 18, behavior: 'smooth' });
+    }
+
+    function renderHeatmap(allDates) {
+      if (allDates.length === 0) {
+        document.getElementById('heatmapContainer').innerHTML = '<p class="text-sm text-slate-500">No data in this range.</p>';
+        document.getElementById('heatmapLegend').innerHTML = '';
+        return;
+      }
+      const mode = document.getElementById('heatmapMode').value;
+      const getColor = getHeatmapColorFn(allDates, mode);
+
+      const monthGroups = [];
+      let curMonth = null, curCount = 0;
+      for (const d of allDates) {
+        const dt = new Date(d.check_in + 'T00:00:00');
+        const key = dt.getFullYear() + '-' + dt.getMonth();
+        if (key !== curMonth) {
+          if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+          curMonth = key; curCount = 1;
+        } else curCount++;
+      }
+      if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+
+      const monthLabels = monthGroups.map(g => {
+        const [y, m] = g.key.split('-').map(Number);
+        const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
+        return `<div class="month-label" style="width: ${g.count * 18}px">${name}</div>`;
+      }).join('');
+
+      const dayLabels = allDates.map(d => {
+        const dt = new Date(d.check_in + 'T00:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 5 || dow === 6;
+        return `<div class="day-label ${isWeekend ? 'weekend' : ''}">${dt.getDate()}</div>`;
+      }).join('');
+
+      const propRows = properties.map(p => {
+        const cells = allDates.map(d => {
+          const r = d.props[p.name];
+          if (!r) return `<div class="heat-cell empty" title="${p.name} ${d.check_in}: no data"></div>`;
+          if (r.rate == null) return `<div class="heat-cell sold-out" title="${p.name} ${d.check_in}: sold out (${r.room_name || ''})"></div>`;
+          const color = getColor(r.rate, d.check_in);
+          return `<div class="heat-cell" style="background: ${color}" title="${p.name} ${fmtDate(d.check_in)}: AU$${Math.round(r.rate)}/n — ${r.room_name || ''}"></div>`;
+        }).join('');
+        return `<div class="heat-row">
+          <div class="row-label ${p.is_wslr ? 'wslr' : ''}">${p.name}${p.is_wslr ? ' (us)' : ''}</div>
+          <div class="cells-container">${cells}</div>
+        </div>`;
+      }).join('');
+
+      document.getElementById('heatmapContainer').innerHTML = `
+        <div class="heatmap-scroll border border-slate-200">
+          <div class="heatmap-inner">
+            <div class="heat-row header-row">
+              <div class="row-label"></div>
+              <div class="cells-container">${monthLabels}</div>
+            </div>
+            <div class="heat-row header-row">
+              <div class="row-label"></div>
+              <div class="cells-container">${dayLabels}</div>
+            </div>
+            ${propRows}
+          </div>
+        </div>
+      `;
+
+      const legendHtml = mode === 'absolute'
+        ? `<span class="legend-swatch" style="background:hsl(130,65%,55%)"></span>cheaper
+           <span class="legend-swatch ml-3" style="background:hsl(65,65%,55%)"></span>mid
+           <span class="legend-swatch ml-3" style="background:hsl(0,65%,55%)"></span>expensive
+           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out`
+        : `<span class="legend-swatch" style="background:hsl(130,60%,50%)"></span>cheaper than market
+           <span class="legend-swatch ml-3" style="background:hsl(0,0%,60%)"></span>at market
+           <span class="legend-swatch ml-3" style="background:hsl(0,60%,50%)"></span>above market
+           <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out`;
+      document.getElementById('heatmapLegend').innerHTML = legendHtml;
+    }
+
+    function renderInsights(allDates) {
+      const stats = calcLongRangeStats(allDates);
+      const top = (arr, n) => arr.slice(0, n);
+
+      const fmtItem = (d, color, sign) => `
+        <div class="flex justify-between text-sm py-2 border-b border-slate-100">
+          <div>
+            <div class="font-medium">${fmtDate(d.check_in)}</div>
+            <div class="text-xs text-slate-500 capitalize">${d.stayType || ''}</div>
+          </div>
+          <div class="text-right ${color}">
+            <div class="font-semibold">AU$${Math.round(d.wslrRate)} <span class="text-xs text-slate-500">vs AU$${Math.round(d.medianOther)} market</span></div>
+            <div class="text-xs">${sign}${(d.deviation * 100).toFixed(0)}%</div>
+          </div>
+        </div>
+      `;
+
+      const oppList = top(stats.opportunityDates, 8).map(d => fmtItem(d, 'text-emerald-700', '')).join('')
+        || '<p class="text-sm text-slate-500 py-3">No dates where WSLR is significantly cheaper than market.</p>';
+      const overList = top(stats.overpriceDates, 8).map(d => fmtItem(d, 'text-rose-700', '+')).join('')
+        || '<p class="text-sm text-slate-500 py-3">No dates where WSLR is significantly above market.</p>';
+
+      document.getElementById('insightsContainer').innerHTML = `
+        <div class="grid md:grid-cols-2 gap-6">
+          <div>
+            <h4 class="font-semibold text-sm mb-1 text-emerald-700">Possible rate-rise candidates</h4>
+            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% below the market median — competitors might be capturing demand we're underpricing.</p>
+            <div class="border border-slate-200 rounded p-3 bg-slate-50">${oppList}</div>
+          </div>
+          <div>
+            <h4 class="font-semibold text-sm mb-1 text-rose-700">Possible overpricing</h4>
+            <p class="text-xs text-slate-500 mb-2">Dates where WSLR is more than 15% above the market median — we may be losing bookings to cheaper competitors.</p>
+            <div class="border border-slate-200 rounded p-3 bg-slate-50">${overList}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function setUnit(u) {
+      unit = u;
+      document.getElementById('btnPerNight').className = 'px-4 py-2 rounded-md font-medium text-sm ' + (u === 'perNight' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-300 text-slate-700');
+      document.getElementById('btnTotal').className = 'px-4 py-2 rounded-md font-medium text-sm ' + (u === 'total' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-300 text-slate-700');
+      render();
+    }
+
+    document.getElementById('btnPerNight').addEventListener('click', () => setUnit('perNight'));
+    document.getElementById('btnTotal').addEventListener('click', () => setUnit('total'));
+    document.getElementById('heatmapMode').addEventListener('change', () => {
+      const { allDates } = buildDateMap();
+      renderHeatmap(allDates);
+    });
+    document.getElementById('rangeStart').addEventListener('change', (e) => {
+      if (!e.target.value) return;
+      applyRange(new Date(e.target.value + 'T00:00:00'), rangeEndDate);
+    });
+    document.getElementById('rangeEnd').addEventListener('change', (e) => {
+      if (!e.target.value) return;
+      applyRange(rangeStartDate, new Date(e.target.value + 'T00:00:00'));
+    });
+
+    // Initial load — sets default range + fetches data
+    setRangePreset('next30');
+  </script>
+</body>
+</html>
