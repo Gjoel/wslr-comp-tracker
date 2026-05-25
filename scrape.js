@@ -13,6 +13,7 @@ const DELAY_MIN_MS = 1500;
 const DELAY_MAX_MS = 3500;
 const START_DATE   = process.env.START_DATE;
 const END_DATE     = process.env.END_DATE;
+const FLUSH_EVERY  = 50;   // flush to Supabase every N rows per worker
 
 // ---------- Supabase ----------
 
@@ -118,21 +119,14 @@ function pricesFromText(text) {
     .filter(n => n >= 50 && n < 10000);
 }
 
-// Decide whether a line of text looks like a real room name (vs a price label, count, etc.)
 function looksLikeRoomName(line) {
   if (!line || line.length <= 3 || line.length >= 120) return false;
-  // Anything containing a currency amount anywhere in the line (e.g. "Price AUD 195", "from AU$220")
   if (/(?:AUD|AU\$|A\$)\s*\d/i.test(line)) return false;
   if (/\$\s*\d{2,}/.test(line)) return false;
-  // Lines that are just price/promotion labels
   if (/^(?:price|from|now|was|total|today|cheapest|select|book)\b/i.test(line)) return false;
-  // Currency-prefixed lines
   if (/^(?:AUD|AU\$|A\$|\$)/i.test(line)) return false;
-  // Counts of guests/beds/etc.
   if (/^\d+\s*(?:guests?|adults?|children?|beds?|nights?)/i.test(line)) return false;
-  // Promotion or constraint lines
   if (/^(only \d+ left|free cancellation|breakfast included|no prepayment|max persons?:|sleeps \d+)/i.test(line)) return false;
-  // Must contain at least one letter (avoid pure-numeric junk)
   if (!/[a-z]/i.test(line)) return false;
   return true;
 }
@@ -286,7 +280,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
     process.exit(1);
   }
 
-  console.log(`Mode: ${TEST_MODE ? 'TEST' : 'FULL'}   Days ahead: ${DAYS_AHEAD}   Concurrency: ${CONCURRENCY}`);
+  console.log(`Mode: ${TEST_MODE ? 'TEST' : 'FULL'}   Days ahead: ${DAYS_AHEAD}   Concurrency: ${CONCURRENCY}   Flush every: ${FLUSH_EVERY}`);
   if (START_DATE || END_DATE) console.log(`Custom range from workflow inputs — START_DATE=${START_DATE || '(default)'}  END_DATE=${END_DATE || '(default)'}`);
   console.log(`Scrape run id: ${SCRAPE_RUN_ID}`);
   console.log(`Supabase URL: ${SUPABASE_URL}`);
@@ -312,21 +306,49 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   }
 
   const startedAt = Date.now();
-  console.log(`Scraping ${jobs.length} jobs with ${CONCURRENCY} parallel workers\n`);
+  console.log(`Scraping ${jobs.length} jobs with ${CONCURRENCY} parallel workers. Inserting incrementally every ${FLUSH_EVERY} rows per worker.\n`);
   const browser = await chromium.launch({ headless: true });
 
   const queues = Array.from({ length: CONCURRENCY }, () => []);
   jobs.forEach((job, i) => queues[i % CONCURRENCY].push(job));
 
+  let totalInserted = 0;
+  let totalFailed = 0;
+
   const workerResults = await Promise.all(queues.map(async (queue, workerId) => {
     await sleep(workerId * 1500);
-    const out = [];
+    const allRowsForWorker = [];
+    const buffer = [];
+
+    const flushBuffer = async () => {
+      if (buffer.length === 0) return;
+      const toInsert = buffer.splice(0, buffer.length);
+      const { error } = await supabase.from('competitor_room_rates').insert(toInsert);
+      if (error) {
+        totalFailed += toInsert.length;
+        console.error(`[W${workerId}] ✗ Insert error (${toInsert.length} rows): ${error.message}`);
+      } else {
+        totalInserted += toInsert.length;
+        console.log(`[W${workerId}] ✓ Flushed ${toInsert.length} rows (worker so far: ${allRowsForWorker.length}, run total inserted: ${totalInserted})`);
+      }
+    };
+
     for (const job of queue) {
       const rows = await scrapeOne(browser, job.property, job.checkIn, job.checkOut, job.stayType, workerId);
-      out.push(...rows);
+      allRowsForWorker.push(...rows);
+      buffer.push(...rows);
+
+      if (buffer.length >= FLUSH_EVERY) {
+        await flushBuffer();
+      }
+
       await sleep(rand(DELAY_MIN_MS, DELAY_MAX_MS));
     }
-    return out;
+
+    // Final flush for any remainder
+    await flushBuffer();
+
+    return allRowsForWorker;
   }));
 
   const records = workerResults.flat();
@@ -335,21 +357,13 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   const elapsedMin = ((Date.now() - startedAt) / 60000).toFixed(1);
   const dumpPath = `dump-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
   fs.writeFileSync(dumpPath, JSON.stringify(records, null, 2));
-  console.log(`\nScraping done in ${elapsedMin} min. Local dump: ${dumpPath}`);
-
-  console.log(`Inserting ${records.length} records into Supabase (batched)...`);
-  if (records.length) {
-    const CHUNK = 500;
-    for (let i = 0; i < records.length; i += CHUNK) {
-      const chunk = records.slice(i, i + CHUNK);
-      const { error } = await supabase.from('competitor_room_rates').insert(chunk);
-      if (error) {
-        console.error(`Supabase insert error at chunk ${i}:`, error);
-        console.error(`Records safe in ${dumpPath} — re-import after fixing.`);
-        process.exit(1);
-      }
-      console.log(`  inserted ${Math.min(i + CHUNK, records.length)} / ${records.length}`);
-    }
+  console.log(`\nScraping done in ${elapsedMin} min.`);
+  console.log(`Records scraped: ${records.length}`);
+  console.log(`Records inserted to Supabase: ${totalInserted}`);
+  if (totalFailed > 0) {
+    console.log(`Records that failed to insert: ${totalFailed} — see error logs above. Backup dump: ${dumpPath}`);
+  } else {
+    console.log(`Backup dump: ${dumpPath}`);
   }
   console.log('Done.');
 })();

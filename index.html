@@ -78,6 +78,7 @@
       <div class="flex gap-2 items-center flex-wrap">
         <button id="btnPerNight" class="px-4 py-2 rounded-md font-medium text-sm bg-slate-900 text-white">Per night</button>
         <button id="btnTotal"    class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700">Stay total</button>
+        <button id="btnExportCsv" onclick="exportCSV()" class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700 hover:bg-slate-100">Export CSV</button>
         <button onclick="openAdmin()" class="px-4 py-2 rounded-md font-medium text-sm bg-emerald-600 text-white">Manage properties</button>
         <button id="btnRunScrape" onclick="openScrapeModal()" class="px-4 py-2 rounded-md font-medium text-sm bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200">Run scrape…</button>
       </div>
@@ -239,8 +240,8 @@
     let properties = [];
     let chart = null;
     let cachedDateMap = null;
-    let roomCatalog = {};   // {propertyName: [roomNames sorted by frequency]} — fetched from 4+ months out
-    let loadToken = 0;       // to ignore stale fetches
+    let roomCatalog = {};
+    let loadToken = 0;
     const TABLE_CAP = 30;
     const CHART_CAP = 30;
 
@@ -276,7 +277,7 @@
       if (!name) return false;
       const trimmed = name.trim();
       if (trimmed.length < 4) return false;
-      if (trimmed.startsWith('(')) return false;  // sold out placeholders
+      if (trimmed.startsWith('(')) return false;
       if (/(?:aud|au\$|a\$)\s*\d/i.test(trimmed)) return false;
       if (/^(?:price|from|now|was|total|today|cheapest)\b/i.test(trimmed)) return false;
       if (!/[a-z]/i.test(trimmed)) return false;
@@ -290,6 +291,84 @@
       if (sameName) return false;
       const delta = Math.abs((rec.rate - rec.prev.rate) / rec.prev.rate);
       return delta > SIGNIFICANT_DELTA;
+    }
+
+    // ---------- CSV export ----------
+    function csvEscape(val) {
+      if (val == null) return '';
+      const s = String(val);
+      if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }
+
+    async function exportCSV() {
+      const btn = document.getElementById('btnExportCsv');
+      const origText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Exporting…';
+
+      try {
+        const all = [];
+        let from = 0;
+        const PAGE = 1000;
+        while (true) {
+          btn.textContent = `Exporting… (${all.length})`;
+          const { data, error } = await sb
+            .from('competitor_room_rates')
+            .select('*')
+            .order('scraped_at', { ascending: false })
+            .range(from, from + PAGE - 1);
+          if (error) throw error;
+          if (!data || data.length === 0) break;
+          all.push(...data);
+          if (data.length < PAGE) break;
+          from += PAGE;
+        }
+
+        if (all.length === 0) {
+          alert('No data found in competitor_room_rates.');
+          btn.disabled = false;
+          btn.textContent = origText;
+          return;
+        }
+
+        // Pick a stable column order so the CSV is readable in Excel
+        const headers = ['scraped_at', 'scrape_run_id', 'property', 'property_slug', 'check_in', 'check_out', 'room_name', 'rate', 'available', 'min_nights', 'currency', 'source', 'notes', 'id'];
+        const lines = [headers.join(',')];
+        for (const row of all) {
+          lines.push(headers.map(h => csvEscape(row[h])).join(','));
+        }
+        const csvText = lines.join('\n');
+
+        const blob = new Blob(['\uFEFF' + csvText], { type: 'text/csv;charset=utf-8' });  // BOM helps Excel show unicode correctly
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `wslr-comp-tracker-${stamp}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        btn.textContent = `✓ ${all.length} rows`;
+        setTimeout(() => { btn.disabled = false; btn.textContent = origText; }, 2500);
+      } catch (err) {
+        alert('Export failed: ' + err.message);
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
+    }
+
+    function getRecentRooms(propertyName) {
+      const counts = {};
+      for (const r of allRows) {
+        if (r.property === propertyName && r.room_name && r.rate != null) {
+          const name = r.room_name.trim();
+          if (!name.startsWith('(')) counts[name] = (counts[name] || 0) + 1;
+        }
+      }
+      return Object.entries(counts).sort(([, a], [, b]) => b - a).map(([name]) => name);
     }
 
     // ---------- Date range ----------
@@ -307,7 +386,6 @@
     }
     function applyRange(start, end) {
       if (!start || !end) {
-        // Revert any partial input change to match state
         if (rangeStartDate) document.getElementById('rangeStart').value = fmtYMD(rangeStartDate);
         if (rangeEndDate) document.getElementById('rangeEnd').value = fmtYMD(rangeEndDate);
         return;
@@ -414,7 +492,6 @@
     }
 
     async function fetchRoomCatalog() {
-      // Pull a slice of data from 4+ months out to discover the full inventory of room types per property.
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const targetStart = new Date(today); targetStart.setMonth(today.getMonth() + 4);
@@ -511,7 +588,6 @@
       }
       document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
       document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
-      // ESC closes any open modal
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           if (!document.getElementById('adminModal').classList.contains('hidden')) closeAdmin();
@@ -546,7 +622,7 @@
     async function load() {
       const myToken = ++loadToken;
       const { data: props, error: pErr } = await sb.from('competitor_properties').select('*').eq('active', true).order('display_order', { ascending: true });
-      if (myToken !== loadToken) return;  // a newer load has started; abandon this one
+      if (myToken !== loadToken) return;
       if (pErr) { document.getElementById('lastUpdated').textContent = 'Error loading properties: ' + pErr.message; return; }
       properties = props || [];
 
@@ -559,7 +635,7 @@
         .lte('check_in', endStr)
         .order('check_in', { ascending: true })
         .limit(50000);
-      if (myToken !== loadToken) return;  // stale, abandon
+      if (myToken !== loadToken) return;
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
       if (data && data.length >= 50000) console.warn('Hit 50K row limit — data may be truncated');
       allRows = data || [];
@@ -1088,7 +1164,7 @@
         for (const p of properties) {
           const r = d.props[p.name];
           if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
-          if (isSubstitution(r)) continue;  // skip substitutions
+          if (isSubstitution(r)) continue;
           const delta = (r.rate - r.prev.rate) / r.prev.rate;
           if (Math.abs(delta) < SIGNIFICANT_DELTA) continue;
           movers.push({

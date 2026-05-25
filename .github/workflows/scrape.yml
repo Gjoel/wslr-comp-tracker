@@ -1,33 +1,33 @@
-name: Competitor scrape
+name: Scrape competitor rates
 
 on:
   schedule:
-    # 14:00 UTC daily = 12am AEST / 1am AEDT — proper overnight every night
     - cron: '0 14 * * *'
   workflow_dispatch:
     inputs:
       start_date:
-        description: 'Start date (YYYY-MM-DD). Leave blank for tomorrow.'
+        description: 'Start date (YYYY-MM-DD, optional — defaults to tomorrow)'
         required: false
-        type: string
+        default: ''
       end_date:
-        description: 'End date (YYYY-MM-DD). Leave blank for tomorrow + 365 days.'
+        description: 'End date (YYYY-MM-DD, optional — defaults to start + 365 days)'
         required: false
-        type: string
+        default: ''
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - name: Setup Node
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
-          cache: 'npm'
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright Chromium
@@ -41,18 +41,28 @@ jobs:
           END_DATE: ${{ inputs.end_date }}
         run: node scrape.js
 
-      - name: Run digest
+      - name: Send digest email
+        if: success()
         env:
+          DIGEST_WEBHOOK_URL: ${{ secrets.DIGEST_WEBHOOK_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          DIGEST_WEBHOOK_URL: ${{ secrets.DIGEST_WEBHOOK_URL }}
         run: node digest.js
 
-      - name: Upload debug screenshots if any
+      - name: Upload debug screenshots
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: debug-screenshots
-          path: 'debug-*.png'
+          path: debug-*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload data dump
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: data-dumps
+          path: dump-*.json
           if-no-files-found: ignore
           retention-days: 7
