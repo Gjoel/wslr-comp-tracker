@@ -231,6 +231,8 @@
     const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
     const SIGNIFICANT_DELTA = 0.05;
+    const PAGE_SIZE = 1000;          // Supabase row cap per request
+    const MAX_PAGES = 100;           // safety stop (100k rows) — way above realistic dataset
 
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let unit = 'perNight';
@@ -293,6 +295,29 @@
       return delta > SIGNIFICANT_DELTA;
     }
 
+    // ---------- Paginated fetcher ----------
+    // Supabase caps each request at PAGE_SIZE rows. Page through until done so wider date ranges aren't truncated.
+    async function fetchAllRates(startStr, endStr) {
+      const all = [];
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const from = page * PAGE_SIZE;
+        const to = from + PAGE_SIZE - 1;
+        const { data, error } = await sb
+          .from('competitor_room_rates')
+          .select('*')
+          .gte('check_in', startStr)
+          .lte('check_in', endStr)
+          .order('check_in', { ascending: true })
+          .order('scraped_at', { ascending: false })
+          .range(from, to);
+        if (error) return { error };
+        if (!data || data.length === 0) break;
+        all.push(...data);
+        if (data.length < PAGE_SIZE) break;
+      }
+      return { data: all };
+    }
+
     // ---------- CSV export ----------
     function csvEscape(val) {
       if (val == null) return '';
@@ -310,19 +335,18 @@
       try {
         const all = [];
         let from = 0;
-        const PAGE = 1000;
         while (true) {
           btn.textContent = `Exporting… (${all.length})`;
           const { data, error } = await sb
             .from('competitor_room_rates')
             .select('*')
             .order('scraped_at', { ascending: false })
-            .range(from, from + PAGE - 1);
+            .range(from, from + PAGE_SIZE - 1);
           if (error) throw error;
           if (!data || data.length === 0) break;
           all.push(...data);
-          if (data.length < PAGE) break;
-          from += PAGE;
+          if (data.length < PAGE_SIZE) break;
+          from += PAGE_SIZE;
         }
 
         if (all.length === 0) {
@@ -332,7 +356,6 @@
           return;
         }
 
-        // Pick a stable column order so the CSV is readable in Excel
         const headers = ['scraped_at', 'scrape_run_id', 'property', 'property_slug', 'check_in', 'check_out', 'room_name', 'rate', 'available', 'min_nights', 'currency', 'source', 'notes', 'id'];
         const lines = [headers.join(',')];
         for (const row of all) {
@@ -340,7 +363,7 @@
         }
         const csvText = lines.join('\n');
 
-        const blob = new Blob(['\uFEFF' + csvText], { type: 'text/csv;charset=utf-8' });  // BOM helps Excel show unicode correctly
+        const blob = new Blob(['\uFEFF' + csvText], { type: 'text/csv;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         const stamp = new Date().toISOString().slice(0, 10);
@@ -497,17 +520,23 @@
       const targetStart = new Date(today); targetStart.setMonth(today.getMonth() + 4);
       const targetEnd = new Date(targetStart); targetEnd.setDate(targetStart.getDate() + 30);
 
-      const { data, error } = await sb
-        .from('competitor_room_rates')
-        .select('property, room_name, rate, scrape_run_id, scraped_at, check_in')
-        .gte('check_in', fmtYMD(targetStart))
-        .lte('check_in', fmtYMD(targetEnd))
-        .limit(20000);
-
-      if (error || !data) { roomCatalog = {}; return; }
+      // Page through so we don't lose room types behind the 1000-row cap
+      const collected = [];
+      for (let page = 0; page < 20; page++) {
+        const from = page * PAGE_SIZE;
+        const { data, error } = await sb
+          .from('competitor_room_rates')
+          .select('property, room_name, rate, scrape_run_id, scraped_at, check_in')
+          .gte('check_in', fmtYMD(targetStart))
+          .lte('check_in', fmtYMD(targetEnd))
+          .range(from, from + PAGE_SIZE - 1);
+        if (error || !data || data.length === 0) break;
+        collected.push(...data);
+        if (data.length < PAGE_SIZE) break;
+      }
 
       const counts = {};
-      for (const r of data) {
+      for (const r of collected) {
         if (!r.room_name || r.rate == null) continue;
         const name = r.room_name.trim();
         if (!isLikelyRealRoom(name)) continue;
@@ -628,16 +657,9 @@
 
       const startStr = fmtYMD(rangeStartDate);
       const endStr   = fmtYMD(rangeEndDate);
-      const { data, error } = await sb
-        .from('competitor_room_rates')
-        .select('*')
-        .gte('check_in', startStr)
-        .lte('check_in', endStr)
-        .order('check_in', { ascending: true })
-        .limit(50000);
+      const { data, error } = await fetchAllRates(startStr, endStr);
       if (myToken !== loadToken) return;
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
-      if (data && data.length >= 50000) console.warn('Hit 50K row limit — data may be truncated');
       allRows = data || [];
       cachedDateMap = null;
       render();
