@@ -24,11 +24,12 @@
     .heatmap-inner { display: inline-block; min-width: 100%; }
     .heat-row { display: flex; align-items: stretch; }
     .heat-row .row-label {
-      width: 180px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; font-weight: 500;
+      width: 220px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; font-weight: 500;
       position: sticky; left: 0; background: white; z-index: 2;
-      border-right: 1px solid #e2e8f0; display: flex; align-items: center;
+      border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;
     }
     .heat-row .row-label.wslr { background: #ecfdf5; }
+    .heat-row .row-label .sub-room { font-size: 10px; color: #64748b; font-weight: 400; margin-top: 1px; }
     .heat-row .cells-container { display: flex; flex-wrap: nowrap; }
     .heat-cell {
       width: 18px; height: 30px; flex-shrink: 0;
@@ -44,10 +45,6 @@
       content: ''; position: absolute; top: 2px; right: 2px;
       width: 5px; height: 5px; background: #f59e0b; border-radius: 50%;
     }
-    .heat-cell.fallback::after {
-      content: '!'; position: absolute; bottom: 1px; left: 3px;
-      font-size: 8px; color: rgba(255,255,255,0.7); font-weight: bold;
-    }
     .heat-cell:hover { outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
     .header-row .row-label { background: white; }
     .month-label {
@@ -62,9 +59,27 @@
     }
     .day-label.weekend { color: #0f172a; font-weight: 600; background: #f1f5f9; }
     .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
-    .room-chip { display: inline-block; font-size: 10px; padding: 1px 6px; border: 1px solid #cbd5e1; border-radius: 999px; margin-right: 4px; margin-bottom: 4px; cursor: pointer; background: white; color: #475569; }
-    .room-chip:hover { background: #f1f5f9; color: #0f172a; }
     .modal-sticky-header { position: sticky; top: 0; background: white; z-index: 10; border-bottom: 1px solid #e2e8f0; }
+    .group-pill {
+      padding: 4px 10px; font-size: 12px; border-radius: 999px;
+      border: 1px solid #cbd5e1; background: white; color: #475569; cursor: pointer;
+      white-space: nowrap;
+    }
+    .group-pill.active { background: #0f172a; color: white; border-color: #0f172a; }
+    .group-pill:hover:not(.active) { background: #f1f5f9; color: #0f172a; }
+
+    /* Inventory section */
+    .inv-heat-row .row-label { width: 180px; }
+    .inv-heat-cell { width: 18px; height: 26px; flex-shrink: 0; border-right: 1px solid white; position: relative; }
+    .inv-heat-cell.available { background: hsl(140, 60%, 55%); }
+    .inv-heat-cell.sold-out-specific { background: #475569; }
+    .inv-heat-cell.sold-out-full { background: #1e293b; }
+    .inv-heat-cell.sold-out-full::after {
+      content: '×'; color: rgba(255,255,255,0.6);
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px;
+    }
+    .inv-heat-cell.empty { background: #f8fafc; }
+    .inv-heat-cell:hover { outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
@@ -84,6 +99,14 @@
       </div>
     </header>
 
+    <!-- Match Group selector -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type</div>
+      <div id="groupPills" class="flex flex-wrap gap-2 mb-2"></div>
+      <div class="text-xs text-slate-500" id="groupSummary"></div>
+    </div>
+
+    <!-- Date range -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-2">
         <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
@@ -106,7 +129,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Date snapshot</h2>
-        <p class="text-sm text-slate-500 mt-1">Cheapest comparable room per property per date. Amber annotations = substitution (cheaper room sold out) or fallback (no comparable room found).</p>
+        <p class="text-sm text-slate-500 mt-1">Cheapest mapped room per property per date for the selected match group. Amber annotations = substitution (cheaper mapped room sold out, more expensive one is now the cheapest mapped option).</p>
       </div>
       <div class="overflow-x-auto p-6">
         <table class="w-full text-sm" id="snapshotTable"></table>
@@ -127,7 +150,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Market view</h2>
-        <p class="text-sm text-slate-500 mt-1">Pricing patterns across all tracked properties for the selected range. Amber dot = substitution; "!" = fallback (no comparable room).</p>
+        <p class="text-sm text-slate-500 mt-1">Pricing patterns across mapped properties for the selected range and match group. Amber dot = substitution.</p>
       </div>
       <div class="p-6">
         <div id="longRangeStats"></div>
@@ -149,10 +172,48 @@
       </div>
     </div>
 
+    <!-- Inventory & availability (Phase 6) -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
-        <h2 class="text-lg font-semibold">Trends & changes</h2>
-        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape. Per-property summary plus the biggest individual movements. Substitutions are excluded from top movers (shown in cards instead).</p>
+        <h2 class="text-lg font-semibold">Inventory &amp; availability</h2>
+        <p class="text-sm text-slate-500 mt-1">Property-level inventory snapshot. <strong>Independent of the match group selector</strong> &mdash; this section is about which specific rooms have stock, not apples-to-apples comparisons.</p>
+      </div>
+      <div class="p-6">
+
+        <!-- Piece A -->
+        <div class="mb-10">
+          <h3 class="font-semibold text-sm mb-1 text-slate-700">WSLR room-type availability</h3>
+          <p class="text-xs text-slate-500 mb-3">For each WSLR room type and each date, was it bookable in the latest scrape? Hover any cell for the rate.</p>
+          <div id="wslrAvailContainer"></div>
+          <div class="text-xs text-slate-500 mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span><span class="legend-swatch" style="background: hsl(140, 60%, 55%)"></span>bookable</span>
+            <span><span class="legend-swatch" style="background: #475569"></span>this type sold out</span>
+            <span><span class="legend-swatch" style="background: #1e293b"></span>all WSLR sold out</span>
+            <span><span class="legend-swatch" style="background: #f8fafc; border: 1px solid #e2e8f0"></span>no data</span>
+          </div>
+        </div>
+
+        <!-- Piece B -->
+        <div class="mb-10">
+          <h3 class="font-semibold text-sm mb-1 text-slate-700">Inventory depth &mdash; # of bookable room types per property</h3>
+          <p class="text-xs text-slate-500 mb-3">Higher = property has more types available. A falling line over time suggests that property is filling up.</p>
+          <canvas id="depthChart" height="100"></canvas>
+        </div>
+
+        <!-- Piece C -->
+        <div>
+          <h3 class="font-semibold text-sm mb-1 text-slate-700">Days-to-sellout &mdash; WSLR room types</h3>
+          <p class="text-xs text-slate-500 mb-3">Average and median days between when a room first appears sold out and the check-in date. Larger sample sizes mean more reliable numbers &mdash; will populate further as daily scrape history builds.</p>
+          <div id="selloutLeadContainer"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Trends &amp; changes</h2>
+        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape for this match group.</p>
       </div>
       <div class="p-6">
         <h3 class="font-semibold text-sm mb-3 text-slate-700">By property</h3>
@@ -169,7 +230,7 @@
 
   <!-- Admin modal -->
   <div id="adminModal" class="fixed inset-0 modal-backdrop hidden items-start justify-center z-50 overflow-y-auto py-8" onclick="if(event.target===this)closeAdmin()">
-    <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 my-8">
+    <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 my-8">
       <div class="modal-sticky-header flex justify-between items-center p-6 rounded-t-lg">
         <h3 class="text-lg font-semibold">Manage properties</h3>
         <button onclick="closeAdmin()" class="text-slate-500 hover:text-slate-900 text-3xl leading-none px-3 py-1 hover:bg-slate-100 rounded">×</button>
@@ -188,7 +249,7 @@
         </div>
 
         <h4 class="font-medium mb-2 text-sm">Current properties</h4>
-        <p class="text-xs text-slate-500 mb-3">Room name suggestions are pulled from scrape data 4+ months out (when most room types are available, not just the cheapest).</p>
+        <p class="text-xs text-slate-500 mb-3">Room comparisons are configured via the <strong>ROOM_MAPPINGS</strong> constant in <code>index.html</code> (hard-coded match groups). To change which competitor rooms map to which WSLR room type, edit that section of the file.</p>
         <div id="propertyList" class="space-y-3"></div>
       </div>
     </div>
@@ -202,7 +263,7 @@
         <button onclick="closeScrapeModal()" class="text-slate-500 hover:text-slate-900 text-3xl leading-none px-3 py-1 hover:bg-slate-100 rounded">×</button>
       </div>
       <div class="p-6 pt-2">
-        <p class="text-sm text-slate-600 mb-4">Triggers a fresh scrape for the date range below. Defaults to the next 30 days.</p>
+        <p class="text-sm text-slate-600 mb-4">Triggers a fresh scrape for the date range below. Weekend check-ins (Fri/Sat) will scrape 2-night stays automatically.</p>
 
         <div class="grid grid-cols-2 gap-3 mb-4">
           <div>
@@ -227,12 +288,119 @@
   </div>
 
   <script>
+    // ==================================================================
+    //  ROOM MAPPINGS — edit this block to change which competitor rooms
+    //  map to each WSLR room type. Property names must match exactly
+    //  what appears in the competitor_properties.name column.
+    //  Patterns are case-insensitive substrings; one matching room per
+    //  property wins (the cheapest) for any given date.
+    // ==================================================================
+    const ROOM_MAPPINGS = [
+      {
+        group: 'Studio / Open Plan',
+        wslrRoom: 'Open Plan Motel Cabin',
+        rooms: {
+          'WSLR (us)': ['Open Plan Motel Style Air Conditioned Cabin'],
+          'Quality Suites Pioneer Sands': ['Studio with Balcony'],
+          'Sage Hotel': ['Deluxe Queen Room', 'Deluxe Twin Room'],
+          'Surfside 22': ['Superior Queen Room'],
+          'Corrimal Beach Tourist Park': ['One-Bedroom Ensuite Cabin'],
+        },
+      },
+      {
+        group: '1-Bedroom Apt (standard)',
+        wslrRoom: '1BR Apartment with A/C',
+        rooms: {
+          'WSLR (us)': ['One-Bedroom Apartment with Air-Conditioning'],
+          'Quality Suites Pioneer Sands': ['King Room', 'Apartment with Balcony'],
+          'Sage Hotel': ['Executive King Room with Balcony'],
+          'Novotel Wollongong': ['Queen Room with City View'],
+          'Surfside 22': ['King Room'],
+        },
+      },
+      {
+        group: '1-Bedroom Apt (premium)',
+        wslrRoom: '1BR Apartment with Private Terrace',
+        rooms: {
+          'WSLR (us)': ['One-Bedroom Apartment with Private Terrace and Air-conditioning'],
+          'Sage Hotel': ['Executive Double Suite'],
+          'Quality Suites Pioneer Sands': ['Apartment with Balcony'],
+          'Surfside 22': ['Superior King Room'],
+          'Novotel Wollongong': ['Superior Queen Room with Ocean View'],
+        },
+      },
+      {
+        group: '2-Bedroom Apt (standard)',
+        wslrRoom: '2BR Apartment with A/C',
+        rooms: {
+          'WSLR (us)': ['Two-Bedroom Apartment with Air-conditioning'],
+          'Quality Suites Pioneer Sands': ['Two-Bedroom Apartment'],
+          'Sage Hotel': ['Family Suite'],
+          'Corrimal Beach Tourist Park': ['Deluxe Two-Bedroom Cabin'],
+          'Surfside 22': ['Queen Room with Two Queen Beds'],
+        },
+      },
+      {
+        group: '2-Bedroom Bungalow',
+        wslrRoom: '2BR Bungalow with A/C',
+        rooms: {
+          'WSLR (us)': ['Two-Bedroom Bungalow with Air-conditioning'],
+          'Quality Suites Pioneer Sands': ['Two-Bedroom Apartment'],
+          'Corrimal Beach Tourist Park': ['Deluxe Two-Bedroom Cabin', 'Deluxe Three-Bedroom Cabin'],
+          'Sage Hotel': ['Family Suite'],
+        },
+      },
+      {
+        group: '2-Bedroom Apt (premium)',
+        wslrRoom: '2BR Apartment with Terrace',
+        rooms: {
+          'WSLR (us)': ['Two-Bedroom Apartment with Terrace and Air-conditioning'],
+          'Quality Suites Pioneer Sands': ['Two-Bedroom Apartment'],
+          'Sage Hotel': ['Sage Suite'],
+          'Novotel Wollongong': ['Panorama Suite'],
+          'Corrimal Beach Tourist Park': ['Deluxe Three-Bedroom Cabin'],
+        },
+      },
+    ];
+
+    // ==================================================================
+    //  WSLR room-type universe — used by the Inventory section to know
+    //  what "all your room types" means. Keep in sync with WSLR's actual
+    //  Booking.com listings.
+    // ==================================================================
+    const WSLR_ROOM_TYPES = [
+      'Open Plan Motel Style Air Conditioned Cabin',
+      'One-Bedroom Apartment with Air-Conditioning',
+      'One-Bedroom Apartment with Private Terrace and Air-conditioning',
+      'Two-Bedroom Apartment with Air-conditioning',
+      'Two-Bedroom Apartment with Terrace and Air-conditioning',
+      'Two-Bedroom Bungalow with Air-conditioning',
+    ];
+    const WSLR_ROOM_LABELS = {
+      'Open Plan Motel Style Air Conditioned Cabin': 'Motel Cabin',
+      'One-Bedroom Apartment with Air-Conditioning': '1BR Apt',
+      'One-Bedroom Apartment with Private Terrace and Air-conditioning': '1BR Apt + Terrace',
+      'Two-Bedroom Apartment with Air-conditioning': '2BR Apt',
+      'Two-Bedroom Apartment with Terrace and Air-conditioning': '2BR Apt + Terrace',
+      'Two-Bedroom Bungalow with Air-conditioning': '2BR Bungalow',
+    };
+
+    const ROOM_KEYWORD_RE = /\b(?:room|suite|apartment|cabin|studio|bungalow|bedroom|loft|villa|cottage|penthouse|chalet|townhouse|residence|dorm)\b/i;
+    function isRealRoomName(name) {
+      if (!name) return false;
+      if (name.startsWith('(')) return false;   // (sold out), (extraction failed), (unknown)
+      if (/(?:AUD|AU\$|A\$)\s*\d/i.test(name)) return false;
+      if (/^(?:price|original|only|excluded)\b/i.test(name)) return false;
+      if (/^\d+\s*%/.test(name)) return false;
+      return ROOM_KEYWORD_RE.test(name);
+    }
+
     const SUPABASE_URL = '__SUPABASE_URL__';
     const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
     const SIGNIFICANT_DELTA = 0.05;
-    const PAGE_SIZE = 1000;          // Supabase row cap per request
-    const MAX_PAGES = 100;           // safety stop (100k rows) — way above realistic dataset
+    const PAGE_SIZE = 1000;
+    const MAX_PAGES = 100;
 
     const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let unit = 'perNight';
@@ -241,9 +409,10 @@
     let allRows = [];
     let properties = [];
     let chart = null;
+    let depthChart = null;
     let cachedDateMap = null;
-    let roomCatalog = {};
     let loadToken = 0;
+    let currentGroupIdx = 0;
     const TABLE_CAP = 30;
     const CHART_CAP = 30;
 
@@ -268,22 +437,30 @@
       const m = (url || '').match(/booking\.com\/hotel\/[a-z]{2}\/([a-z0-9\-]+)\./i);
       return m ? m[1] : null;
     }
-    function wslrName() { const w = properties.find(p => p.is_wslr); return w ? w.name : null; }
     function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, "&#39;").replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
     function median(arr) {
       if (!arr || arr.length === 0) return null;
       const sorted = [...arr].sort((a, b) => a - b);
       return sorted[Math.floor(sorted.length / 2)];
     }
-    function isLikelyRealRoom(name) {
-      if (!name) return false;
-      const trimmed = name.trim();
-      if (trimmed.length < 4) return false;
-      if (trimmed.startsWith('(')) return false;
-      if (/(?:aud|au\$|a\$)\s*\d/i.test(trimmed)) return false;
-      if (/^(?:price|from|now|was|total|today|cheapest)\b/i.test(trimmed)) return false;
-      if (!/[a-z]/i.test(trimmed)) return false;
-      return true;
+
+    function currentMapping() { return ROOM_MAPPINGS[currentGroupIdx]; }
+    function wslrName() {
+      const w = properties.find(p => p.is_wslr);
+      return w ? w.name : null;
+    }
+    function activeMappedProperties() {
+      const mapping = currentMapping();
+      return properties.filter(p => Array.isArray(mapping.rooms[p.name]) && mapping.rooms[p.name].length > 0);
+    }
+    function patternsFor(propertyName) {
+      const m = currentMapping();
+      return m.rooms[propertyName] || null;
+    }
+    function roomLabelFor(propertyName) {
+      const pats = patternsFor(propertyName);
+      if (!pats) return '';
+      return pats.join(' / ');
     }
 
     function isSubstitution(rec) {
@@ -295,8 +472,6 @@
       return delta > SIGNIFICANT_DELTA;
     }
 
-    // ---------- Paginated fetcher ----------
-    // Supabase caps each request at PAGE_SIZE rows. Page through until done so wider date ranges aren't truncated.
     async function fetchAllRates(startStr, endStr) {
       const all = [];
       for (let page = 0; page < MAX_PAGES; page++) {
@@ -318,7 +493,6 @@
       return { data: all };
     }
 
-    // ---------- CSV export ----------
     function csvEscape(val) {
       if (val == null) return '';
       const s = String(val);
@@ -331,7 +505,6 @@
       const origText = btn.textContent;
       btn.disabled = true;
       btn.textContent = 'Exporting…';
-
       try {
         const all = [];
         let from = 0;
@@ -348,21 +521,16 @@
           if (data.length < PAGE_SIZE) break;
           from += PAGE_SIZE;
         }
-
         if (all.length === 0) {
           alert('No data found in competitor_room_rates.');
           btn.disabled = false;
           btn.textContent = origText;
           return;
         }
-
         const headers = ['scraped_at', 'scrape_run_id', 'property', 'property_slug', 'check_in', 'check_out', 'room_name', 'rate', 'available', 'min_nights', 'currency', 'source', 'notes', 'id'];
         const lines = [headers.join(',')];
-        for (const row of all) {
-          lines.push(headers.map(h => csvEscape(row[h])).join(','));
-        }
+        for (const row of all) lines.push(headers.map(h => csvEscape(row[h])).join(','));
         const csvText = lines.join('\n');
-
         const blob = new Blob(['\uFEFF' + csvText], { type: 'text/csv;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -373,7 +541,6 @@
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-
         btn.textContent = `✓ ${all.length} rows`;
         setTimeout(() => { btn.disabled = false; btn.textContent = origText; }, 2500);
       } catch (err) {
@@ -383,15 +550,23 @@
       }
     }
 
-    function getRecentRooms(propertyName) {
-      const counts = {};
-      for (const r of allRows) {
-        if (r.property === propertyName && r.room_name && r.rate != null) {
-          const name = r.room_name.trim();
-          if (!name.startsWith('(')) counts[name] = (counts[name] || 0) + 1;
-        }
-      }
-      return Object.entries(counts).sort(([, a], [, b]) => b - a).map(([name]) => name);
+    // ---------- Match Group selector ----------
+    function renderGroupPills() {
+      const container = document.getElementById('groupPills');
+      container.innerHTML = ROOM_MAPPINGS.map((m, i) =>
+        `<button class="group-pill ${i === currentGroupIdx ? 'active' : ''}" onclick="setMatchGroup(${i})">${escAttr(m.group)}</button>`
+      ).join('');
+      const mapping = currentMapping();
+      const mappedProps = Object.keys(mapping.rooms);
+      const summary = `<strong>WSLR room:</strong> ${escAttr(mapping.wslrRoom)} · <strong>Compared to:</strong> ${mappedProps.filter(n => n !== 'WSLR (us)').join(', ')}`;
+      document.getElementById('groupSummary').innerHTML = summary;
+    }
+
+    function setMatchGroup(idx) {
+      currentGroupIdx = idx;
+      cachedDateMap = null;
+      renderGroupPills();
+      render();
     }
 
     // ---------- Date range ----------
@@ -463,14 +638,11 @@
       const end = document.getElementById('scrapeEnd').value;
       const errEl = document.getElementById('scrapeError');
       const btn = document.getElementById('btnSubmitScrape');
-
       if (!start || !end) { errEl.textContent = 'Please pick both start and end dates.'; errEl.classList.remove('hidden'); return; }
       if (new Date(start) > new Date(end)) { errEl.textContent = 'Start must be before end.'; errEl.classList.remove('hidden'); return; }
-
       errEl.classList.add('hidden');
       btn.textContent = 'Triggering…';
       btn.disabled = true;
-
       try {
         const res = await fetch(APPS_SCRIPT_URL, {
           method: 'POST',
@@ -505,7 +677,6 @@
     async function openAdmin() {
       document.getElementById('adminModal').classList.remove('hidden');
       document.getElementById('adminModal').classList.add('flex');
-      await fetchRoomCatalog();
       await renderPropertyList();
     }
     function closeAdmin() {
@@ -514,54 +685,19 @@
       load();
     }
 
-    async function fetchRoomCatalog() {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const targetStart = new Date(today); targetStart.setMonth(today.getMonth() + 4);
-      const targetEnd = new Date(targetStart); targetEnd.setDate(targetStart.getDate() + 30);
-
-      // Page through so we don't lose room types behind the 1000-row cap
-      const collected = [];
-      for (let page = 0; page < 20; page++) {
-        const from = page * PAGE_SIZE;
-        const { data, error } = await sb
-          .from('competitor_room_rates')
-          .select('property, room_name, rate, scrape_run_id, scraped_at, check_in')
-          .gte('check_in', fmtYMD(targetStart))
-          .lte('check_in', fmtYMD(targetEnd))
-          .range(from, from + PAGE_SIZE - 1);
-        if (error || !data || data.length === 0) break;
-        collected.push(...data);
-        if (data.length < PAGE_SIZE) break;
-      }
-
-      const counts = {};
-      for (const r of collected) {
-        if (!r.room_name || r.rate == null) continue;
-        const name = r.room_name.trim();
-        if (!isLikelyRealRoom(name)) continue;
-        if (!counts[r.property]) counts[r.property] = {};
-        counts[r.property][name] = (counts[r.property][name] || 0) + 1;
-      }
-      roomCatalog = {};
-      for (const prop of Object.keys(counts)) {
-        roomCatalog[prop] = Object.entries(counts[prop]).sort(([, a], [, b]) => b - a).map(([n]) => n);
-      }
-    }
-
     async function renderPropertyList() {
       const { data, error } = await sb.from('competitor_properties').select('*').order('display_order', { ascending: true });
       if (error) { document.getElementById('propertyList').innerHTML = '<p class="text-rose-600 text-sm">' + error.message + '</p>'; return; }
-
       document.getElementById('propertyList').innerHTML = data.map(p => {
-        const cataloged = (roomCatalog[p.name] || []).slice(0, 12);
-        const chipsHtml = cataloged.length > 0
-          ? cataloged.map(r => `<span class="room-chip" onclick="document.getElementById('pattern-${p.id}').value=${JSON.stringify(r)}">${escAttr(r.length > 38 ? r.slice(0, 38) + '…' : r)}</span>`).join('')
-          : '<span class="text-xs text-slate-400 italic">No room data found 4+ months out yet — run a scrape that covers far-future dates and reopen this dialog.</span>';
-
+        const inGroups = ROOM_MAPPINGS
+          .filter(m => Array.isArray(m.rooms[p.name]) && m.rooms[p.name].length > 0)
+          .map(m => m.group);
+        const groupsHtml = inGroups.length > 0
+          ? inGroups.map(g => `<span class="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 mr-1">${escAttr(g)}</span>`).join('')
+          : '<span class="text-xs text-amber-700 italic">Not in any match group — won\'t appear in dashboard</span>';
         return `
           <div class="border border-slate-200 rounded p-3 ${p.is_wslr ? 'bg-emerald-50' : ''}">
-            <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center justify-between mb-2">
               <div>
                 <div class="font-medium text-sm">${escAttr(p.name)} ${p.is_wslr ? '<span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
                 <div class="text-xs text-slate-500">${escAttr(p.slug)}</div>
@@ -572,36 +708,13 @@
                 ${p.is_wslr ? '' : `<button onclick="deleteProperty(${p.id}, '${p.name.replace(/'/g, "\\'")}')" class="text-xs px-2 py-1 rounded border border-rose-300 text-rose-600 hover:bg-rose-50">Delete</button>`}
               </div>
             </div>
-            <div class="border-t border-slate-200 pt-3">
-              <label class="text-xs text-slate-700 block mb-1 font-medium">Comparable room pattern</label>
-              <p class="text-xs text-slate-500 mb-2">Text to match in room names (case-insensitive). Leave blank to use the cheapest available room. Click a chip below to copy it in.</p>
-              <div class="flex gap-2 mb-2">
-                <input type="text" id="pattern-${p.id}" value="${escAttr(p.comparable_room_pattern || '')}" placeholder='e.g. "Standard Double"' class="flex-1 text-xs border border-slate-300 rounded px-2 py-1">
-                <button onclick="saveRoomPattern(${p.id})" id="save-${p.id}" class="text-xs px-3 py-1 bg-slate-900 text-white rounded">Save</button>
-              </div>
-              <div class="text-xs text-slate-500">${chipsHtml}</div>
+            <div class="border-t border-slate-200 pt-2">
+              <div class="text-xs text-slate-700 mb-1 font-medium">In match groups:</div>
+              <div>${groupsHtml}</div>
             </div>
           </div>
         `;
       }).join('');
-    }
-
-    async function saveRoomPattern(propertyId) {
-      const input = document.getElementById('pattern-' + propertyId);
-      const btn = document.getElementById('save-' + propertyId);
-      const newPattern = input.value.trim() || null;
-      btn.disabled = true;
-      btn.textContent = 'Saving…';
-      const { error } = await sb.from('competitor_properties').update({ comparable_room_pattern: newPattern, updated_at: new Date().toISOString() }).eq('id', propertyId);
-      if (error) {
-        alert('Failed to save: ' + error.message);
-        btn.disabled = false;
-        btn.textContent = 'Save';
-      } else {
-        btn.textContent = '✓ Saved';
-        setTimeout(() => { btn.disabled = false; btn.textContent = 'Save'; }, 1500);
-        await load();
-      }
     }
 
     document.addEventListener('DOMContentLoaded', () => {
@@ -635,7 +748,7 @@
       if (!name) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = 'Please enter a display name.'; return; }
       const { error } = await sb.from('competitor_properties').insert({ name, slug, booking_url: url, display_order: 100, active: true, is_wslr: false });
       if (error) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = error.message; }
-      else { msg.className = 'text-sm mt-2 text-emerald-600'; msg.textContent = `Added "${name}". Picked up in next scrape.`; document.getElementById('newUrl').value = ''; document.getElementById('newName').value = ''; renderPropertyList(); }
+      else { msg.className = 'text-sm mt-2 text-emerald-600'; msg.textContent = `Added "${name}". Add it to ROOM_MAPPINGS in index.html so it appears in the dashboard.`; document.getElementById('newUrl').value = ''; document.getElementById('newName').value = ''; renderPropertyList(); }
     }
     async function toggleActive(id, newActive) {
       const { error } = await sb.from('competitor_properties').update({ active: newActive, updated_at: new Date().toISOString() }).eq('id', id);
@@ -662,32 +775,29 @@
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
       allRows = data || [];
       cachedDateMap = null;
+      renderGroupPills();
       render();
     }
 
-    function pickCheapest(rows, pattern) {
-      let candidates = rows;
-      let matchedPattern = false;
-      let fallbackUsed = false;
-      if (pattern) {
-        const lower = pattern.toLowerCase();
-        const filtered = rows.filter(r => r.room_name && r.room_name.toLowerCase().includes(lower));
-        if (filtered.length > 0) { candidates = filtered; matchedPattern = true; }
-        else { fallbackUsed = true; }
-      }
+    function pickCheapestByPatterns(rows, patterns) {
+      if (!patterns || patterns.length === 0) return null;
+      const lower = patterns.map(p => p.toLowerCase());
+      const filtered = rows.filter(r => {
+        if (!r.room_name) return false;
+        const rn = r.room_name.toLowerCase();
+        return lower.some(p => rn.includes(p));
+      });
+      if (filtered.length === 0) return null;
       let best = null;
-      for (const r of candidates) {
+      for (const r of filtered) {
         if (r.rate == null) { if (!best) best = r; continue; }
         if (!best || best.rate == null || r.rate < best.rate) best = r;
       }
-      if (!best) return null;
-      return { ...best, matchedPattern, fallbackUsed };
+      return best;
     }
 
     function buildDateMap() {
       if (cachedDateMap) return cachedDateMap;
-      const propByName = {};
-      for (const p of properties) propByName[p.name] = p;
 
       const byCell = {};
       for (const r of allRows) {
@@ -699,21 +809,23 @@
       const currentRows = [];
       const byDate = {};
       for (const k of Object.keys(byCell)) {
+        const propName = k.split('|')[0];
+        const patterns = patternsFor(propName);
+        if (!patterns) continue;
+
         const runEntries = Object.entries(byCell[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
         const latest = runEntries[0][1];
         const previous = runEntries.length > 1 ? runEntries[1][1] : null;
 
-        const propName = latest.rows[0]?.property;
-        const pattern = propByName[propName]?.comparable_room_pattern || null;
-
-        const currCheapest = pickCheapest(latest.rows, pattern);
-        const prevCheapest = previous ? pickCheapest(previous.rows, pattern) : null;
+        const currCheapest = pickCheapestByPatterns(latest.rows, patterns);
+        const prevCheapest = previous ? pickCheapestByPatterns(previous.rows, patterns) : null;
         if (!currCheapest) continue;
         currentRows.push(currCheapest);
         if (!byDate[currCheapest.check_in]) {
           byDate[currCheapest.check_in] = {
             check_in: currCheapest.check_in, check_out: currCheapest.check_out,
             stayType: currCheapest.notes?.match(/stay_type=(\w+)/)?.[1] || '',
+            nights: currCheapest.notes?.match(/nights=(\d+)/)?.[1] || null,
             props: {},
           };
         }
@@ -726,6 +838,139 @@
       return cachedDateMap;
     }
 
+    // ==================================================================
+    //  INVENTORY HELPERS (Phase 6)
+    // ==================================================================
+
+    // Piece A: For each (date, WSLR room type) — was it bookable in latest scrape?
+    function buildWslrAvailability() {
+      const wslr = wslrName();
+      if (!wslr) return null;
+      const byDateRun = {};
+      for (const r of allRows) {
+        if (r.property !== wslr) continue;
+        if (!byDateRun[r.check_in]) byDateRun[r.check_in] = {};
+        if (!byDateRun[r.check_in][r.scrape_run_id]) byDateRun[r.check_in][r.scrape_run_id] = { scraped_at: r.scraped_at, rows: [] };
+        byDateRun[r.check_in][r.scrape_run_id].rows.push(r);
+      }
+      const result = {};
+      for (const checkIn of Object.keys(byDateRun)) {
+        const runs = Object.entries(byDateRun[checkIn]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
+        const latest = runs[0][1];
+        const fullSoldOut = latest.rows.some(r => r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name)));
+        const availableMap = {};
+        for (const r of latest.rows) {
+          if (!isRealRoomName(r.room_name)) continue;
+          if (r.rate == null || r.available === false) continue;
+          availableMap[r.room_name.toLowerCase()] = r.rate;
+        }
+        result[checkIn] = WSLR_ROOM_TYPES.map(rt => {
+          if (fullSoldOut) return { room: rt, status: 'fullSoldOut', rate: null };
+          const rate = availableMap[rt.toLowerCase()];
+          if (rate != null) return { room: rt, status: 'available', rate };
+          // Try a loose substring match for slight name variations
+          const fuzzy = Object.keys(availableMap).find(k => k.includes(rt.toLowerCase()) || rt.toLowerCase().includes(k));
+          if (fuzzy) return { room: rt, status: 'available', rate: availableMap[fuzzy] };
+          return { room: rt, status: 'soldOut', rate: null };
+        });
+      }
+      return result;
+    }
+
+    // Piece B: For each property, per-date count of bookable real room types (latest scrape)
+    function buildInventoryDepth() {
+      const byCell = {};
+      for (const r of allRows) {
+        const k = r.property + '|' + r.check_in;
+        if (!byCell[k]) byCell[k] = {};
+        if (!byCell[k][r.scrape_run_id]) byCell[k][r.scrape_run_id] = { scraped_at: r.scraped_at, names: new Set() };
+        if (isRealRoomName(r.room_name) && r.rate != null && r.available !== false) {
+          byCell[k][r.scrape_run_id].names.add(r.room_name);
+        }
+      }
+      const series = {};
+      for (const k of Object.keys(byCell)) {
+        const [property, checkIn] = k.split('|');
+        const runs = Object.entries(byCell[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
+        const count = runs[0][1].names.size;
+        if (!series[property]) series[property] = [];
+        series[property].push({ date: checkIn, count });
+      }
+      for (const p of Object.keys(series)) series[p].sort((a, b) => a.date.localeCompare(b.date));
+      return series;
+    }
+
+    // Piece C: Days-to-sellout per WSLR room type
+    function buildSelloutLeadTime() {
+      const wslr = wslrName();
+      if (!wslr) return null;
+      const history = {};
+      for (const r of allRows) {
+        if (r.property !== wslr) continue;
+        if (!history[r.check_in]) history[r.check_in] = {};
+        if (!history[r.check_in][r.scrape_run_id]) {
+          history[r.check_in][r.scrape_run_id] = {
+            scraped_at: r.scraped_at,
+            available_rooms: new Set(),
+            full_sold_out: false,
+          };
+        }
+        const slot = history[r.check_in][r.scrape_run_id];
+        if (r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name))) {
+          slot.full_sold_out = true;
+        } else if (isRealRoomName(r.room_name) && r.rate != null && r.available !== false) {
+          slot.available_rooms.add(r.room_name.toLowerCase());
+        }
+      }
+      const leads = {};
+      WSLR_ROOM_TYPES.forEach(rt => { leads[rt] = []; });
+      for (const checkIn of Object.keys(history)) {
+        const checkInDate = new Date(checkIn + 'T00:00:00');
+        const runs = Object.entries(history[checkIn])
+          .map(([runId, data]) => ({ runId, ...data, scrapedDate: new Date(data.scraped_at) }))
+          .sort((a, b) => a.scrapedDate - b.scrapedDate);
+        if (runs.length < 2) continue;
+        for (const rt of WSLR_ROOM_TYPES) {
+          const rtLower = rt.toLowerCase();
+          const isAvailableIn = (run) => {
+            if (run.full_sold_out) return false;
+            if (run.available_rooms.has(rtLower)) return true;
+            for (const name of run.available_rooms) {
+              if (name.includes(rtLower) || rtLower.includes(name)) return true;
+            }
+            return false;
+          };
+          let firstSoldOutScrape = null;
+          let lastAvailableScrape = null;
+          for (const run of runs) {
+            if (isAvailableIn(run)) {
+              lastAvailableScrape = run;
+              firstSoldOutScrape = null;
+            } else if (lastAvailableScrape && !firstSoldOutScrape) {
+              firstSoldOutScrape = run;
+            }
+          }
+          const latestRun = runs[runs.length - 1];
+          const isStillSoldOut = !isAvailableIn(latestRun);
+          if (firstSoldOutScrape && isStillSoldOut) {
+            const leadDays = (checkInDate - firstSoldOutScrape.scrapedDate) / 86400000;
+            if (leadDays >= 0) leads[rt].push(leadDays);
+          }
+        }
+      }
+      return WSLR_ROOM_TYPES.map(rt => {
+        const arr = leads[rt];
+        if (arr.length === 0) return { room: rt, count: 0, avg: null, median: null };
+        const avg = arr.reduce((s, x) => s + x, 0) / arr.length;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const med = sorted[Math.floor(sorted.length / 2)];
+        return { room: rt, count: arr.length, avg, median: med };
+      });
+    }
+
+    // ==================================================================
+    //  RENDER
+    // ==================================================================
     function render() {
       const { allDates, currentRows } = buildDateMap();
       renderHeader(currentRows);
@@ -737,6 +982,7 @@
       renderMonthChips(allDates);
       renderHeatmap(allDates);
       renderInsights(allDates);
+      renderInventory();
       renderTrends(allDates);
       renderTopMovers(allDates);
     }
@@ -747,7 +993,7 @@
       const requestedDays = Math.round((rangeEndDate - rangeStartDate) / 86400000) + 1;
       const haveDates = allDates.length;
       if (haveDates < requestedDays * 0.8) {
-        el.innerHTML = `<span class="text-amber-700">⚠ ${haveDates} dates with data of ${requestedDays} requested</span> — daily scrape may not have populated yet.`;
+        el.innerHTML = `<span class="text-amber-700">⚠ ${haveDates} dates with data of ${requestedDays} requested</span> — daily scrape may not have populated yet, or this match group is sparse.`;
       } else {
         el.textContent = `${haveDates} of ${requestedDays} dates with data`;
       }
@@ -755,7 +1001,7 @@
 
     function renderHeader(rows) {
       if (!rows || rows.length === 0) {
-        document.getElementById('lastUpdated').textContent = 'No data in this range. Try a different window or trigger a scrape.';
+        document.getElementById('lastUpdated').textContent = 'No data in this range for the selected match group.';
         return;
       }
       const latestScrape = rows.reduce((max, r) => r.scraped_at > max ? r.scraped_at : max, rows[0].scraped_at);
@@ -765,10 +1011,11 @@
 
     function renderStats(dates) {
       const wslr = wslrName();
+      const mappedProps = activeMappedProperties();
       let cheapest = 0, total = 0, wslrSum = 0, wslrCount = 0, compSum = 0, compCount = 0;
       for (const d of dates) {
         const w = d.props[wslr];
-        const others = properties.filter(p => !p.is_wslr).map(p => d.props[p.name]).filter(r => r && r.rate != null);
+        const others = mappedProps.filter(p => !p.is_wslr).map(p => d.props[p.name]).filter(r => r && r.rate != null);
         if (!w || w.rate == null) continue;
         total++;
         const wv = displayRate(w.rate, d.check_in, d.check_out);
@@ -782,7 +1029,7 @@
       const diff = (wslrAvg && compAvg) ? ((wslrAvg - compAvg) / compAvg * 100) : null;
       const cards = [
         { label: 'WSLR avg (range)', value: wslrAvg != null ? 'AU$' + Math.round(wslrAvg) : '—', sub: unit === 'perNight' ? 'per night' : 'stay total' },
-        { label: 'Competitor avg (range)', value: compAvg != null ? 'AU$' + Math.round(compAvg) : '—', sub: 'across selected window' },
+        { label: 'Competitor avg (range)', value: compAvg != null ? 'AU$' + Math.round(compAvg) : '—', sub: 'mapped rooms only' },
         { label: 'WSLR vs competitors', value: diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(1) + '%' : '—', sub: diff != null && diff < 0 ? 'cheaper on avg' : 'more expensive', cls: diff != null && diff < 0 ? 'text-emerald-600' : 'text-rose-600' },
         { label: 'Cheapest in market', value: cheapest + '/' + total, sub: 'dates where WSLR wins' },
       ];
@@ -801,9 +1048,11 @@
       const wslr = wslrName();
       const t = document.getElementById('snapshotTable');
       const note = document.getElementById('snapshotNote');
-      const headers = ['Date', 'Stay', ...properties.map(p => p.name)];
+      const mappedProps = activeMappedProperties();
+      const headers = ['Date', 'Stay', ...mappedProps.map(p => p.name)];
+      const subHeaders = ['', '', ...mappedProps.map(p => roomLabelFor(p.name))];
       const rows = visible.map(d => {
-        const ratesForRow = properties.map(p => {
+        const ratesForRow = mappedProps.map(p => {
           const r = d.props[p.name];
           return { prop: p, rec: r, displayed: r ? displayRate(r.rate, d.check_in, d.check_out) : null };
         });
@@ -825,10 +1074,7 @@
           if (isSubstitution(rec)) {
             const prevDisp = displayRate(rec.prev.rate, d.check_in, d.check_out);
             const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
-            extras += `<div class="substitution" title="Room type changed — cheaper room likely sold out. Previously: ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
-          }
-          if (rec.fallbackUsed) {
-            extras += `<div class="fallback" title="No room matched the configured comparable pattern. Showing cheapest available instead.">⚠ no comparable room — fallback</div>`;
+            extras += `<div class="substitution" title="Mapped-room change — was ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
           }
           return `<td class="${cls}">
             <div class="font-semibold">${fmtAUD(displayed)}</div>
@@ -837,14 +1083,21 @@
           </td>`;
         }).join('');
         return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
-          <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
+          <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}${d.nights && d.nights !== '1' ? `<div class="text-xs text-slate-400 font-normal">${d.nights}n</div>` : ''}</td>
           <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType}</td>
           ${cells}
         </tr>`;
       }).join('');
-      t.innerHTML = `<thead><tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
-        ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${escAttr(h)}</th>`).join('')}
-      </tr></thead><tbody>${rows}</tbody>`;
+      t.innerHTML = `
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
+            ${headers.map((h, i) => `<th class="py-2 px-3 ${i >= 2 ? 'text-right' : ''}">${escAttr(h)}</th>`).join('')}
+          </tr>
+          <tr class="text-left text-xs text-slate-400 border-b border-slate-200">
+            ${subHeaders.map((h, i) => `<th class="py-1 px-3 font-normal ${i >= 2 ? 'text-right' : ''}">${escAttr(h)}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>`;
       if (truncated) {
         note.classList.remove('hidden');
         note.textContent = `Showing first ${TABLE_CAP} of ${allDates.length} dates — see the Market view heatmap for the full range.`;
@@ -866,7 +1119,8 @@
       const ctx = document.getElementById('rateChart').getContext('2d');
       const labels = dates.map(d => fmtDate(d.check_in));
       const palette = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#0891b2', '#a855f7', '#14b8a6'];
-      const datasets = properties.map((p, i) => ({
+      const mappedProps = activeMappedProperties();
+      const datasets = mappedProps.map((p, i) => ({
         label: p.name,
         data: dates.map(d => { const r = d.props[p.name]; return r ? displayRate(r.rate, d.check_in, d.check_out) : null; }),
         backgroundColor: palette[i % palette.length],
@@ -888,14 +1142,15 @@
 
     function calcLongRangeStats(allDates) {
       const wslr = wslrName();
-      const compProps = properties.filter(p => !p.is_wslr);
+      const mappedProps = activeMappedProperties();
+      const compProps = mappedProps.filter(p => !p.is_wslr);
       const soldOutCount = {};
-      properties.forEach(p => soldOutCount[p.name] = 0);
+      mappedProps.forEach(p => soldOutCount[p.name] = 0);
       let wslrCheapest = 0, wslrMidMarket = 0, wslrMostExpensive = 0, wslrComparable = 0;
       const opportunityDates = [];
       const overpriceDates = [];
       for (const d of allDates) {
-        properties.forEach(p => { const r = d.props[p.name]; if (!r || r.rate == null) soldOutCount[p.name]++; });
+        mappedProps.forEach(p => { const r = d.props[p.name]; if (!r || r.rate == null) soldOutCount[p.name]++; });
         const wslrR = d.props[wslr];
         if (!wslrR || wslrR.rate == null) continue;
         const otherRates = compProps.map(p => d.props[p.name]).filter(r => r && r.rate != null).map(r => r.rate);
@@ -920,7 +1175,8 @@
     function renderLongRangeStats(allDates) {
       const stats = calcLongRangeStats(allDates);
       const wslr = wslrName();
-      const compProps = properties.filter(p => !p.is_wslr);
+      const mappedProps = activeMappedProperties();
+      const compProps = mappedProps.filter(p => !p.is_wslr);
       const pct = (n) => stats.wslrComparable ? Math.round(n / stats.wslrComparable * 100) : 0;
       const soldOutSummary = compProps.map(p => `${p.name.split(' ')[0]}: ${stats.soldOutCount[p.name] || 0}`).join(' · ');
       document.getElementById('longRangeStats').innerHTML = `
@@ -950,9 +1206,10 @@
     }
 
     function getHeatmapColorFn(allDates, mode) {
+      const mappedProps = activeMappedProperties();
       if (mode === 'absolute') {
         const rates = [];
-        allDates.forEach(d => properties.forEach(p => { const r = d.props[p.name]; if (r && r.rate != null) rates.push(r.rate); }));
+        allDates.forEach(d => mappedProps.forEach(p => { const r = d.props[p.name]; if (r && r.rate != null) rates.push(r.rate); }));
         if (rates.length === 0) return () => '#f8fafc';
         const sorted = [...rates].sort((a, b) => a - b);
         const minR = sorted[Math.floor(sorted.length * 0.05)];
@@ -966,7 +1223,7 @@
       } else {
         const medianByDate = {};
         allDates.forEach(d => {
-          const r = properties.map(p => d.props[p.name]).filter(x => x && x.rate != null).map(x => x.rate).sort((a, b) => a - b);
+          const r = mappedProps.map(p => d.props[p.name]).filter(x => x && x.rate != null).map(x => x.rate).sort((a, b) => a - b);
           if (r.length > 0) medianByDate[d.check_in] = r[Math.floor(r.length / 2)];
         });
         return (rate, dateStr) => {
@@ -1006,18 +1263,19 @@
     }
 
     function scrollHeatmapToDay(dayIdx) {
-      const scroller = document.querySelector('.heatmap-scroll');
+      const scroller = document.querySelector('#heatmapContainer .heatmap-scroll');
       if (scroller) scroller.scrollTo({ left: dayIdx * 18, behavior: 'smooth' });
     }
 
     function renderHeatmap(allDates) {
       if (allDates.length === 0) {
-        document.getElementById('heatmapContainer').innerHTML = '<p class="text-sm text-slate-500">No data in this range.</p>';
+        document.getElementById('heatmapContainer').innerHTML = '<p class="text-sm text-slate-500">No data in this range for the selected match group.</p>';
         document.getElementById('heatmapLegend').innerHTML = '';
         return;
       }
       const mode = document.getElementById('heatmapMode').value;
       const getColor = getHeatmapColorFn(allDates, mode);
+      const mappedProps = activeMappedProperties();
       const monthGroups = [];
       let curMonth = null, curCount = 0;
       for (const d of allDates) {
@@ -1040,22 +1298,25 @@
         const isWeekend = dow === 5 || dow === 6;
         return `<div class="day-label ${isWeekend ? 'weekend' : ''}">${dt.getDate()}</div>`;
       }).join('');
-      const propRows = properties.map(p => {
+      const propRows = mappedProps.map(p => {
+        const roomLabel = roomLabelFor(p.name);
+        const roomShort = roomLabel.length > 28 ? roomLabel.slice(0, 28) + '…' : roomLabel;
         const cells = allDates.map(d => {
           const r = d.props[p.name];
           if (!r) return `<div class="heat-cell empty" title="${escAttr(p.name + ' ' + d.check_in + ': no data')}"></div>`;
           if (r.rate == null) return `<div class="heat-cell sold-out" title="${escAttr(p.name + ' ' + d.check_in + ': sold out (' + (r.room_name || '') + ')')}"></div>`;
           const color = getColor(r.rate, d.check_in);
           const sub = isSubstitution(r);
-          const fb = r.fallbackUsed;
           let title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
           if (sub) title += ' ⚠ SUBSTITUTION — was AU$' + Math.round(r.prev.rate) + ' (' + r.prev.room_name + ')';
-          if (fb) title += ' ⚠ FALLBACK — no room matched comparable pattern';
-          const cellCls = 'heat-cell' + (sub ? ' substitution' : '') + (fb ? ' fallback' : '');
+          const cellCls = 'heat-cell' + (sub ? ' substitution' : '');
           return `<div class="${cellCls}" style="background: ${color}" title="${escAttr(title)}"></div>`;
         }).join('');
         return `<div class="heat-row">
-          <div class="row-label ${p.is_wslr ? 'wslr' : ''}">${escAttr(p.name)}${p.is_wslr ? ' (us)' : ''}</div>
+          <div class="row-label ${p.is_wslr ? 'wslr' : ''}">
+            <div>${escAttr(p.name)}${p.is_wslr ? ' (us)' : ''}</div>
+            <div class="sub-room">${escAttr(roomShort)}</div>
+          </div>
           <div class="cells-container">${cells}</div>
         </div>`;
       }).join('');
@@ -1073,14 +1334,12 @@
            <span class="legend-swatch ml-3" style="background:hsl(65,65%,55%)"></span>mid
            <span class="legend-swatch ml-3" style="background:hsl(0,65%,55%)"></span>expensive
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>
-           <span class="ml-3 text-amber-700">!  fallback</span>`
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`
         : `<span class="legend-swatch" style="background:hsl(130,60%,50%)"></span>cheaper than market
            <span class="legend-swatch ml-3" style="background:hsl(0,0%,60%)"></span>at market
            <span class="legend-swatch ml-3" style="background:hsl(0,60%,50%)"></span>above market
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>
-           <span class="ml-3 text-amber-700">!  fallback</span>`;
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`;
       document.getElementById('heatmapLegend').innerHTML = legendHtml;
     }
 
@@ -1119,9 +1378,221 @@
       `;
     }
 
+    // ==================================================================
+    //  INVENTORY RENDERS (Phase 6 — A + B + C)
+    // ==================================================================
+    function renderInventory() {
+      renderWslrAvailability();
+      renderInventoryDepth();
+      renderSelloutLead();
+    }
+
+    function renderWslrAvailability() {
+      const container = document.getElementById('wslrAvailContainer');
+      const data = buildWslrAvailability();
+      if (!data) {
+        container.innerHTML = '<p class="text-sm text-slate-500">No WSLR data found in this range.</p>';
+        return;
+      }
+      const sortedDates = Object.keys(data).sort();
+      if (sortedDates.length === 0) {
+        container.innerHTML = '<p class="text-sm text-slate-500">No data in this range.</p>';
+        return;
+      }
+
+      const monthGroups = [];
+      let curMonth = null, curCount = 0;
+      for (const d of sortedDates) {
+        const dt = new Date(d + 'T00:00:00');
+        const key = dt.getFullYear() + '-' + dt.getMonth();
+        if (key !== curMonth) {
+          if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+          curMonth = key; curCount = 1;
+        } else curCount++;
+      }
+      if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+
+      const monthLabels = monthGroups.map(g => {
+        const [y, m] = g.key.split('-').map(Number);
+        const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
+        return `<div class="month-label" style="width: ${g.count * 18}px">${name}</div>`;
+      }).join('');
+
+      const dayLabels = sortedDates.map(d => {
+        const dt = new Date(d + 'T00:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 5 || dow === 6;
+        return `<div class="day-label ${isWeekend ? 'weekend' : ''}">${dt.getDate()}</div>`;
+      }).join('');
+
+      const propRows = WSLR_ROOM_TYPES.map(rt => {
+        const label = WSLR_ROOM_LABELS[rt] || rt;
+        const cells = sortedDates.map(d => {
+          const cell = data[d].find(c => c.room === rt);
+          if (!cell) return `<div class="inv-heat-cell empty"></div>`;
+          if (cell.status === 'available') {
+            return `<div class="inv-heat-cell available" title="${escAttr(label)} · ${fmtDate(d)}: AU$${Math.round(cell.rate)}/night"></div>`;
+          }
+          if (cell.status === 'fullSoldOut') {
+            return `<div class="inv-heat-cell sold-out-full" title="${escAttr(label)} · ${fmtDate(d)}: ALL WSLR sold out"></div>`;
+          }
+          return `<div class="inv-heat-cell sold-out-specific" title="${escAttr(label)} · ${fmtDate(d)}: sold out (other types may still be available)"></div>`;
+        }).join('');
+        return `<div class="heat-row inv-heat-row">
+          <div class="row-label wslr">
+            <div>${escAttr(label)}</div>
+          </div>
+          <div class="cells-container">${cells}</div>
+        </div>`;
+      }).join('');
+
+      let totalAvailable = 0, totalSpecificSoldOut = 0, totalFullSoldOut = 0;
+      for (const d of sortedDates) {
+        for (const cell of data[d]) {
+          if (cell.status === 'available') totalAvailable++;
+          else if (cell.status === 'fullSoldOut') totalFullSoldOut++;
+          else totalSpecificSoldOut++;
+        }
+      }
+      const totalCells = sortedDates.length * WSLR_ROOM_TYPES.length;
+      const pct = (n) => Math.round(n / Math.max(1, totalCells) * 100);
+
+      container.innerHTML = `
+        <div class="grid grid-cols-3 gap-3 mb-3">
+          <div class="bg-emerald-50 rounded border border-emerald-200 p-3">
+            <div class="text-xs uppercase tracking-wide text-emerald-700">Bookable cells</div>
+            <div class="text-xl font-bold mt-1 text-emerald-700">${totalAvailable} <span class="text-xs font-normal text-slate-500">(${pct(totalAvailable)}%)</span></div>
+          </div>
+          <div class="bg-slate-100 rounded border border-slate-200 p-3">
+            <div class="text-xs uppercase tracking-wide text-slate-600">Type-specific sold out</div>
+            <div class="text-xl font-bold mt-1">${totalSpecificSoldOut} <span class="text-xs font-normal text-slate-500">(${pct(totalSpecificSoldOut)}%)</span></div>
+          </div>
+          <div class="bg-slate-200 rounded border border-slate-300 p-3">
+            <div class="text-xs uppercase tracking-wide text-slate-700">Fully sold out</div>
+            <div class="text-xl font-bold mt-1">${totalFullSoldOut} <span class="text-xs font-normal text-slate-500">(${pct(totalFullSoldOut)}%)</span></div>
+          </div>
+        </div>
+        <div class="heatmap-scroll border border-slate-200">
+          <div class="heatmap-inner">
+            <div class="heat-row inv-heat-row header-row"><div class="row-label"></div><div class="cells-container">${monthLabels}</div></div>
+            <div class="heat-row inv-heat-row header-row"><div class="row-label"></div><div class="cells-container">${dayLabels}</div></div>
+            ${propRows}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderInventoryDepth() {
+      const data = buildInventoryDepth();
+      const ctx = document.getElementById('depthChart').getContext('2d');
+      const allDatesSet = new Set();
+      for (const p of Object.keys(data)) for (const pt of data[p]) allDatesSet.add(pt.date);
+      const allDates = [...allDatesSet].sort();
+      if (depthChart) { depthChart.destroy(); depthChart = null; }
+      if (allDates.length === 0) return;
+      const palette = {
+        'WSLR (us)': '#10b981',
+        'Novotel Wollongong': '#6366f1',
+        'Quality Suites Pioneer Sands': '#f59e0b',
+        'Sage Hotel': '#ef4444',
+        'Surfside 22': '#0891b2',
+        'Corrimal Beach Tourist Park': '#a855f7',
+      };
+      const wslr = wslrName();
+      const propsSorted = Object.keys(data).sort((a, b) => {
+        if (a === wslr) return -1;
+        if (b === wslr) return 1;
+        return a.localeCompare(b);
+      });
+      const datasets = propsSorted.map(p => ({
+        label: p,
+        data: allDates.map(d => {
+          const pt = data[p].find(x => x.date === d);
+          return pt ? pt.count : null;
+        }),
+        borderColor: palette[p] || '#94a3b8',
+        backgroundColor: 'transparent',
+        tension: 0.3,
+        pointRadius: 2,
+        borderWidth: p === wslr ? 3 : 2,
+        spanGaps: true,
+      }));
+      const labels = allDates.map(d => fmtDate(d));
+      depthChart = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'bottom' },
+            tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (c.parsed.y != null ? c.parsed.y + ' room types' : '—') } },
+          },
+          scales: {
+            y: { beginAtZero: true, title: { display: true, text: '# of bookable room types' }, ticks: { precision: 0 } },
+          },
+        },
+      });
+    }
+
+    function renderSelloutLead() {
+      const data = buildSelloutLeadTime();
+      const container = document.getElementById('selloutLeadContainer');
+      if (!data) { container.innerHTML = '<p class="text-sm text-slate-500">No data available.</p>'; return; }
+      const totalN = data.reduce((s, x) => s + x.count, 0);
+      if (totalN === 0) {
+        container.innerHTML = `
+          <div class="border border-slate-200 rounded p-4 bg-slate-50 text-center">
+            <p class="text-sm text-slate-500 italic">Not enough scrape history yet to compute sellout lead times.</p>
+            <p class="text-xs text-slate-400 mt-2">This populates as room types transition from available → sold out across daily scrapes. Check back in a week or so.</p>
+          </div>
+        `;
+        return;
+      }
+      const maxAvg = Math.max(...data.filter(d => d.avg != null).map(d => d.avg), 1);
+      const rows = data.map(d => {
+        const label = WSLR_ROOM_LABELS[d.room] || d.room;
+        if (d.count === 0) {
+          return `
+            <div class="flex items-center gap-3 py-2 border-b border-slate-100 text-sm">
+              <div class="w-44 font-medium flex-shrink-0">${escAttr(label)}</div>
+              <div class="flex-1 text-xs text-slate-400 italic">No sellouts observed yet in this range</div>
+              <div class="w-16 text-right text-xs text-slate-400 flex-shrink-0">n=0</div>
+            </div>
+          `;
+        }
+        const widthPct = Math.max(2, (d.avg / maxAvg) * 100);
+        return `
+          <div class="flex items-center gap-3 py-2 border-b border-slate-100 text-sm">
+            <div class="w-44 font-medium flex-shrink-0">${escAttr(label)}</div>
+            <div class="flex-1">
+              <div class="bg-emerald-100 h-5 rounded relative overflow-hidden" style="width: ${widthPct}%">
+                <div class="absolute inset-0 flex items-center px-2 text-xs font-semibold text-emerald-900 whitespace-nowrap">
+                  ${d.avg.toFixed(1)} days
+                </div>
+              </div>
+            </div>
+            <div class="w-24 text-right text-xs text-slate-500 flex-shrink-0">
+              median ${d.median.toFixed(0)}d
+            </div>
+            <div class="w-16 text-right text-xs text-slate-400 flex-shrink-0">
+              n=${d.count}
+            </div>
+          </div>
+        `;
+      }).join('');
+      container.innerHTML = `
+        <div class="border border-slate-200 rounded p-3 bg-slate-50">
+          ${rows}
+        </div>
+        <p class="text-xs text-slate-400 mt-2">Lead time = days between the first scrape showing this type sold out and the check-in date. Reliable averages need n ≥ ~10.</p>
+      `;
+    }
+
     function renderTrends(allDates) {
+      const mappedProps = activeMappedProperties();
       const stats = {};
-      for (const p of properties) {
+      for (const p of mappedProps) {
         stats[p.name] = {
           name: p.name, isWslr: p.is_wslr,
           currRates: [], prevRates: [],
@@ -1129,7 +1600,7 @@
         };
       }
       for (const d of allDates) {
-        for (const p of properties) {
+        for (const p of mappedProps) {
           const r = d.props[p.name];
           const s = stats[p.name];
           if (!r) continue;
@@ -1181,9 +1652,10 @@
     }
 
     function renderTopMovers(allDates) {
+      const mappedProps = activeMappedProperties();
       const movers = [];
       for (const d of allDates) {
-        for (const p of properties) {
+        for (const p of mappedProps) {
           const r = d.props[p.name];
           if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
           if (isSubstitution(r)) continue;
@@ -1242,6 +1714,7 @@
       applyRange(rangeStartDate, new Date(e.target.value + 'T00:00:00'));
     });
 
+    renderGroupPills();
     setRangePreset('next30');
   </script>
 </body>
