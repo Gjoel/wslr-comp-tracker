@@ -117,10 +117,42 @@ function buildUrl(slug, checkIn, checkOut) {
 }
 
 function pricesFromText(text) {
-  const matches = text.match(/(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)/g) || [];
-  return matches
-    .map(m => parseFloat(m.replace(/[^\d.]/g, '')))
-    .filter(n => n >= 50 && n < 10000);
+  // Match a price AND look at the surrounding 80 chars on each side
+  // to skip ones that are Genius/loyalty/strikethrough/before-price labels.
+  const re = /(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)/gi;
+  const out = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const value = parseFloat(m[1].replace(/,/g, ''));
+    if (!(value >= 50 && value < 10000)) continue;
+    const windowStart = Math.max(0, m.index - 80);
+    const windowEnd = Math.min(text.length, m.index + m[0].length + 80);
+    const windowText = text.substring(windowStart, windowEnd).toLowerCase();
+    // Skip prices that look like Genius/loyalty/member preview rates,
+    // strikethrough originals, or "save AUD …" deltas.
+    if (/\b(?:genius|loyalty|member[\s-]?only|app[\s-]?only|mobile[\s-]?only|signed\s*in|sign\s*in|book\s+direct|earn\s+\d|reward(?:\s+nights?)?)\b/.test(windowText)) continue;
+    if (/\b(?:was|before|originally|original\s+price|rrp|crossed[\s-]?out|reduced\s+from|save\s+(?:au\$|aud|a\$|\$))\b/.test(windowText)) continue;
+    out.push(value);
+  }
+  return out;
+}
+
+// "Only 2 left at this price!", "Only 1 left on our site", "We have 5 left"
+function extractRoomsLeft(text) {
+  if (!text) return null;
+  const patterns = [
+    /only\s+(\d+)\s+(?:rooms?\s+)?left/i,
+    /we have\s+(\d+)\s+(?:rooms?\s+)?left/i,
+    /(\d+)\s+rooms?\s+left\s+at\s+this\s+price/i,
+  ];
+  for (const re of patterns) {
+    const mm = text.match(re);
+    if (mm) {
+      const n = parseInt(mm[1], 10);
+      if (n >= 1 && n <= 100) return n;
+    }
+  }
+  return null;
 }
 
 // Real room names always include one of these descriptors. Promo labels, price strings,
@@ -177,9 +209,13 @@ async function getRoomRates(page, nights) {
     const roomName = lines[0];
     if (!roomName) continue;
 
+    const roomsLeft = extractRoomsLeft(text);
     const perNight = stayTotal / nights;
     if (!byName[roomName] || perNight < byName[roomName].rate) {
-      byName[roomName] = { roomName, rate: perNight };
+      byName[roomName] = { roomName, rate: perNight, roomsLeft };
+    } else if (roomsLeft != null && byName[roomName].roomsLeft == null) {
+      // Keep cheapest rate but still record a roomsLeft signal if we see it later
+      byName[roomName].roomsLeft = roomsLeft;
     }
   }
 
@@ -267,7 +303,8 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
     }
 
     const cheapest = Math.min(...rooms.map(r => r.rate));
-    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${nights}n  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n`);
+    const badgesSeen = rooms.filter(r => r.roomsLeft != null).length;
+    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${nights}n  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n${badgesSeen > 0 ? `  (${badgesSeen} low-stock badge${badgesSeen > 1 ? 's' : ''})` : ''}`);
 
     return rooms.map(r => ({
       ...base,
@@ -275,6 +312,7 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
       rate: r.rate,
       available: true,
       min_nights: minNights,
+      rooms_left: r.roomsLeft,
       notes: `stay_type=${stayType}; nights=${nights}; source=hprt-table`,
     }));
   } catch (err) {

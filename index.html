@@ -271,11 +271,11 @@
           <div id="perPropertyInvContainer" class="space-y-3"></div>
         </div>
 
-        <!-- Piece B -->
+        <!-- Piece B: Competitor inventory matrix (per-room-type remaining-count detail) -->
         <div class="mb-10">
-          <h3 class="font-semibold text-sm mb-1 text-slate-700">Inventory depth &mdash; # of bookable room types per property</h3>
-          <p class="text-xs text-slate-500 mb-3">Higher = property has more types available. A falling line over time suggests that property is filling up.</p>
-          <canvas id="depthChart" height="100"></canvas>
+          <h3 class="font-semibold text-sm mb-1 text-slate-700">Competitor inventory by room type</h3>
+          <p class="text-xs text-slate-500 mb-3">Per-room-type bookability over the date range. Numbers in cells = "Only X left at this price" badges captured from Booking (low-stock signal). <strong>✓</strong> = bookable, count unknown. <strong>—</strong> = sold out or no data. WSLR's calendar is up above; this section is for competitors.</p>
+          <div id="competitorInvMatrix" class="space-y-4"></div>
         </div>
 
         <!-- Piece C -->
@@ -292,16 +292,20 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Rate trajectory</h2>
-        <p class="text-sm text-slate-500 mt-1">Pick a check-in date below to see how each property's rate for that night has moved over every scrape we've taken. Reveals when properties dropped or hiked prices for that date.</p>
+        <p class="text-sm text-slate-500 mt-1">Pick a check-in date and a WSLR room type to see how each property's comparable room rate has moved across every scrape we've taken. Reveals when competitors dropped or hiked prices.</p>
       </div>
       <div class="p-6">
+        <div class="mb-3">
+          <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type:</div>
+          <div id="trajectoryGroupPills" class="flex flex-wrap gap-2"></div>
+        </div>
         <div class="flex items-center gap-3 flex-wrap mb-4">
           <label class="text-xs uppercase tracking-wide text-slate-500">Check-in date:</label>
           <select id="trajectoryDate" class="text-sm border border-slate-300 rounded px-3 py-1.5"></select>
           <div class="text-xs text-slate-500" id="trajectoryMeta"></div>
         </div>
         <canvas id="trajectoryChart" height="120"></canvas>
-        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date yet. Pick another date or wait for more scrapes.</div>
+        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date and room type yet. Pick another date or room type, or wait for more scrapes.</div>
       </div>
     </div>
 
@@ -1040,16 +1044,19 @@
         for (const r of latest.rows) {
           if (!isRealRoomName(r.room_name)) continue;
           if (r.rate == null || r.available === false) continue;
-          availableMap[r.room_name.toLowerCase()] = r.rate;
+          availableMap[r.room_name.toLowerCase()] = { rate: r.rate, roomsLeft: r.rooms_left != null ? r.rooms_left : null };
         }
         result[checkIn] = WSLR_ROOM_TYPES.map(rt => {
-          if (fullSoldOut) return { room: rt, status: 'fullSoldOut', rate: null };
-          const rate = availableMap[rt.toLowerCase()];
-          if (rate != null) return { room: rt, status: 'available', rate };
+          if (fullSoldOut) return { room: rt, status: 'fullSoldOut', rate: null, roomsLeft: null };
+          const direct = availableMap[rt.toLowerCase()];
+          if (direct) return { room: rt, status: 'available', rate: direct.rate, roomsLeft: direct.roomsLeft };
           // Try a loose substring match for slight name variations
-          const fuzzy = Object.keys(availableMap).find(k => k.includes(rt.toLowerCase()) || rt.toLowerCase().includes(k));
-          if (fuzzy) return { room: rt, status: 'available', rate: availableMap[fuzzy] };
-          return { room: rt, status: 'soldOut', rate: null };
+          const fuzzyKey = Object.keys(availableMap).find(k => k.includes(rt.toLowerCase()) || rt.toLowerCase().includes(k));
+          if (fuzzyKey) {
+            const f = availableMap[fuzzyKey];
+            return { room: rt, status: 'available', rate: f.rate, roomsLeft: f.roomsLeft };
+          }
+          return { room: rt, status: 'soldOut', rate: null, roomsLeft: null };
         });
       }
       return result;
@@ -1220,6 +1227,7 @@
       renderInventory();
       renderTrends(allDates);
       renderTopMovers(allDates);
+      renderTrajectoryPills();
       populateTrajectoryDates(allDates);
       renderTrajectory();
     }
@@ -1313,9 +1321,13 @@
             const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
             extras += `<div class="substitution" title="Mapped-room change — was ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
           }
+          const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
+          const roomLine = bookingUrl
+            ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
+            : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
           return `<td class="${cls}">
             <div class="font-semibold">${fmtAUD(displayed)}</div>
-            <div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>
+            ${roomLine}
             ${extras}
           </td>`;
         }).join('');
@@ -1621,7 +1633,7 @@
     function renderInventory() {
       renderWslrCalendar();
       renderPerPropertyInventory();
-      renderInventoryDepth();
+      renderCompetitorInventoryMatrix();
       renderSelloutLead();
     }
 
@@ -1711,7 +1723,12 @@
             return `<div class="pms-cell sold-out ${weekendCls}" title="${escAttr(title)}">—</div>`;
           }
           const rateStr = Math.round(cell.rate);
-          return `<div class="pms-cell avail ${weekendCls}" title="${escAttr(label)} · ${fmtDate(d)}: AU$${rateStr}/night">${rateStr}</div>`;
+          const left = cell.roomsLeft;
+          const lowStockDot = (left != null && left <= 3)
+            ? `<span style="position:absolute; top:2px; right:3px; width:6px; height:6px; border-radius:50%; background:${left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : '#d97706'};"></span>`
+            : '';
+          const titleSuffix = left != null ? ` · only ${left} left at this price` : '';
+          return `<div class="pms-cell avail ${weekendCls}" title="${escAttr(label)} · ${fmtDate(d)}: AU$${rateStr}/night${titleSuffix}">${rateStr}${lowStockDot}</div>`;
         }).join('');
         return `<div class="pms-cal-row wslr-row">
           <div class="pms-label">
@@ -1814,57 +1831,159 @@
       }).join('');
     }
 
-    function renderInventoryDepth() {
-      const data = buildInventoryDepth();
-      const ctx = document.getElementById('depthChart').getContext('2d');
-      const allDatesSet = new Set();
-      for (const p of Object.keys(data)) for (const pt of data[p]) allDatesSet.add(pt.date);
-      const allDates = [...allDatesSet].sort();
-      if (depthChart) { depthChart.destroy(); depthChart = null; }
-      if (allDates.length === 0) return;
-      const palette = {
-        'WSLR (us)': '#10b981',
-        'Novotel Wollongong': '#6366f1',
-        'Quality Suites Pioneer Sands': '#f59e0b',
-        'Sage Hotel': '#ef4444',
-        'Surfside 22': '#0891b2',
-        'Corrimal Beach Tourist Park': '#a855f7',
-      };
+    // Build per-property → per-room-type → per-date map from latest scrape.
+    // Returns { property: { rooms: [room1, room2,...], dates: [d1, d2,...], cells: {room:{date:{status,rate,roomsLeft}}} } }
+    function buildCompetitorInventoryMatrix() {
       const wslr = wslrName();
-      const propsSorted = Object.keys(data).sort((a, b) => {
-        if (a === wslr) return -1;
-        if (b === wslr) return 1;
-        return a.localeCompare(b);
-      });
-      const datasets = propsSorted.map(p => ({
-        label: p,
-        data: allDates.map(d => {
-          const pt = data[p].find(x => x.date === d);
-          return pt ? pt.count : null;
-        }),
-        borderColor: palette[p] || '#94a3b8',
-        backgroundColor: 'transparent',
-        tension: 0.3,
-        pointRadius: 2,
-        borderWidth: p === wslr ? 3 : 2,
-        spanGaps: true,
-      }));
-      const labels = allDates.map(d => fmtDate(d));
-      depthChart = new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets },
-        options: {
-          responsive: true,
-          interaction: { mode: 'index', intersect: false },
-          plugins: {
-            legend: { position: 'bottom' },
-            tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (c.parsed.y != null ? c.parsed.y + ' room types' : '—') } },
-          },
-          scales: {
-            y: { beginAtZero: true, title: { display: true, text: '# of bookable room types' }, ticks: { precision: 0 } },
-          },
-        },
-      });
+      // Step 1: group by (property, check_in, scrape_run_id) and keep latest
+      const byCellRun = {};
+      for (const r of allRows) {
+        const k = r.property + '|' + r.check_in;
+        if (!byCellRun[k]) byCellRun[k] = {};
+        if (!byCellRun[k][r.scrape_run_id]) byCellRun[k][r.scrape_run_id] = { scraped_at: r.scraped_at, rooms: {}, fullSoldOut: false };
+        const slot = byCellRun[k][r.scrape_run_id];
+        if (r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name))) {
+          slot.fullSoldOut = true;
+        } else if (isRealRoomName(r.room_name) && r.rate != null && r.available !== false) {
+          slot.rooms[r.room_name] = { rate: r.rate, roomsLeft: r.rooms_left != null ? r.rooms_left : null };
+        }
+      }
+      const latestByProp = {};
+      for (const k of Object.keys(byCellRun)) {
+        const [property, checkIn] = k.split('|');
+        const runs = Object.entries(byCellRun[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
+        const latest = runs[0][1];
+        if (!latestByProp[property]) latestByProp[property] = {};
+        latestByProp[property][checkIn] = latest;
+      }
+      // Step 2: for each property, find universe of room types + sorted dates
+      const result = {};
+      for (const property of Object.keys(latestByProp)) {
+        if (property === wslr) continue;  // WSLR has its own calendar above
+        const dates = Object.keys(latestByProp[property]).sort();
+        if (dates.length === 0) continue;
+        const universe = new Set();
+        for (const checkIn of dates) {
+          for (const room of Object.keys(latestByProp[property][checkIn].rooms)) universe.add(room);
+        }
+        // For each room, count days sold-out to sort by urgency
+        const rooms = [...universe].map(room => {
+          let availableDays = 0, lowStockDays = 0;
+          for (const checkIn of dates) {
+            const slot = latestByProp[property][checkIn].rooms[room];
+            if (slot) {
+              availableDays++;
+              if (slot.roomsLeft != null && slot.roomsLeft <= 3) lowStockDays++;
+            }
+          }
+          return { name: room, availableDays, soldOutDays: dates.length - availableDays, lowStockDays };
+        });
+        rooms.sort((a, b) => (b.soldOutDays - a.soldOutDays) || (b.lowStockDays - a.lowStockDays));
+        result[property] = { dates, rooms: rooms.map(r => r.name), latestByDate: latestByProp[property] };
+      }
+      return result;
+    }
+
+    function renderCompetitorInventoryMatrix() {
+      const container = document.getElementById('competitorInvMatrix');
+      const data = buildCompetitorInventoryMatrix();
+      const propertyNames = Object.keys(data);
+      if (propertyNames.length === 0) {
+        container.innerHTML = '<p class="text-sm text-slate-500">No competitor data in this range.</p>';
+        return;
+      }
+      const CELL_W = 30;
+      propertyNames.sort();
+
+      container.innerHTML = propertyNames.map(prop => {
+        const { dates, rooms, latestByDate } = data[prop];
+        if (rooms.length === 0) {
+          return `
+            <div class="border border-slate-200 rounded bg-white">
+              <div class="px-4 py-2 border-b border-slate-200 bg-slate-50 font-medium text-sm">${escAttr(prop)}</div>
+              <div class="p-4 text-xs text-slate-500 italic">No real room types observed.</div>
+            </div>
+          `;
+        }
+        // Month + day headers
+        const monthGroups = [];
+        let curMonth = null, curCount = 0;
+        for (const d of dates) {
+          const dt = new Date(d + 'T00:00:00');
+          const key = dt.getFullYear() + '-' + dt.getMonth();
+          if (key !== curMonth) {
+            if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+            curMonth = key; curCount = 1;
+          } else curCount++;
+        }
+        if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
+        const monthLabels = monthGroups.map(g => {
+          const [y, m] = g.key.split('-').map(Number);
+          const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short' });
+          return `<div style="width: ${g.count * CELL_W}px; height: 20px; font-size: 10px; font-weight: 600; color: #475569; display: flex; align-items: center; padding-left: 4px; border-right: 1px solid #e2e8f0; background: #f8fafc; text-transform: uppercase; flex-shrink: 0;">${name}</div>`;
+        }).join('');
+        const dayLabels = dates.map(d => {
+          const dt = new Date(d + 'T00:00:00');
+          const dow = dt.getDay();
+          const isWeekend = dow === 5 || dow === 6;
+          return `<div style="width: ${CELL_W}px; height: 20px; font-size: 9px; color: ${isWeekend ? '#0f172a' : '#94a3b8'}; font-weight: ${isWeekend ? '700' : '400'}; background: ${isWeekend ? '#f1f5f9' : 'white'}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-right: 1px solid #f1f5f9;">${dt.getDate()}</div>`;
+        }).join('');
+
+        const roomRows = rooms.map(roomName => {
+          const cells = dates.map(d => {
+            const dt = new Date(d + 'T00:00:00');
+            const dow = dt.getDay();
+            const isWeekend = dow === 5 || dow === 6;
+            const dayData = latestByDate[d];
+            if (!dayData) return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : '#fafafa'}; flex-shrink: 0; border-right: 1px solid #f1f5f9;"></div>`;
+            const slot = dayData.rooms[roomName];
+            if (!slot) {
+              // Sold out (specific) or full sold out
+              const title = dayData.fullSoldOut ? `${roomName} · ${fmtDate(d)}: property fully sold out` : `${roomName} · ${fmtDate(d)}: sold out`;
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #cbd5e1;" title="${escAttr(title)}">—</div>`;
+            }
+            // Bookable
+            const left = slot.roomsLeft;
+            const rateLabel = `AU$${Math.round(slot.rate)}/n`;
+            if (left != null) {
+              // Low-stock badge — color by remaining count
+              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : '#059669';
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': only ' + left + ' left at this price · ' + rateLabel)}">${left}</div>`;
+            }
+            // Bookable, count unknown
+            return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel)}">✓</div>`;
+          }).join('');
+          const shortName = roomName.length > 30 ? roomName.slice(0, 30) + '…' : roomName;
+          return `
+            <div style="display: flex; align-items: stretch; border-bottom: 1px solid #f1f5f9;">
+              <div style="width: 200px; flex-shrink: 0; padding: 4px 10px; font-size: 11px; position: sticky; left: 0; background: white; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; align-items: center;" title="${escAttr(roomName)}">${escAttr(shortName)}</div>
+              <div style="display: flex; flex-wrap: nowrap;">${cells}</div>
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="border border-slate-200 rounded bg-white">
+            <div class="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+              <div class="font-medium text-sm">${escAttr(prop)}</div>
+              <div class="text-xs text-slate-500">${rooms.length} room types · ${dates.length} dates</div>
+            </div>
+            <div style="overflow-x: auto;">
+              <div style="display: inline-block; min-width: 100%;">
+                <div style="display: flex;">
+                  <div style="width: 200px; flex-shrink: 0; border-right: 1px solid #e2e8f0; background: white;"></div>
+                  <div style="display: flex; flex-wrap: nowrap;">${monthLabels}</div>
+                </div>
+                <div style="display: flex;">
+                  <div style="width: 200px; flex-shrink: 0; border-right: 1px solid #e2e8f0; background: white;"></div>
+                  <div style="display: flex; flex-wrap: nowrap;">${dayLabels}</div>
+                </div>
+                ${roomRows}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderSelloutLead() {
@@ -2130,13 +2249,23 @@
     }
 
     function buildTrajectory(checkInDate) {
-      // For one check_in date, group all rows by (property, scrape_run_id),
-      // take cheapest per group, sort scrape_runs chronologically.
+      // For one check_in date + the current match group, group rows by
+      // (property, scrape_run_id), take cheapest matching room per group,
+      // sort chronologically.
       const rows = allRows.filter(r => r.check_in === checkInDate);
       if (rows.length === 0) return null;
+      // Only keep rooms that match patterns for that property in the current group
+      const matched = rows.filter(r => {
+        const patterns = patternsFor(r.property);
+        if (!patterns) return false;
+        const rn = (r.room_name || '').toLowerCase();
+        return patterns.some(p => rn.includes(p.toLowerCase()));
+      });
+      if (matched.length === 0) return null;
+
       // property -> scrape_run_id -> { scraped_at, cheapestRate }
       const byProp = {};
-      for (const r of rows) {
+      for (const r of matched) {
         if (!byProp[r.property]) byProp[r.property] = {};
         if (!byProp[r.property][r.scrape_run_id]) {
           byProp[r.property][r.scrape_run_id] = { scraped_at: r.scraped_at, rate: r.rate };
@@ -2145,7 +2274,6 @@
           if (r.rate != null && (slot.rate == null || r.rate < slot.rate)) slot.rate = r.rate;
         }
       }
-      // Convert to series: property -> sorted [{ scraped_at, rate }]
       const series = {};
       const allScrapeTimes = new Set();
       for (const property of Object.keys(byProp)) {
@@ -2156,6 +2284,14 @@
         points.forEach(p => allScrapeTimes.add(p.scraped_at));
       }
       return { series, scrapeTimes: [...allScrapeTimes].sort() };
+    }
+
+    function renderTrajectoryPills() {
+      const container = document.getElementById('trajectoryGroupPills');
+      if (!container) return;
+      container.innerHTML = ROOM_MAPPINGS.map((m, i) =>
+        `<button class="group-pill ${i === currentGroupIdx ? 'active' : ''}" onclick="setMatchGroup(${i})">${escAttr(m.group)}</button>`
+      ).join('');
     }
 
     function renderTrajectory() {
