@@ -80,6 +80,73 @@
     }
     .inv-heat-cell.empty { background: #f8fafc; }
     .inv-heat-cell:hover { outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
+
+    /* PMS-style calendar (Phase 8 + screenshot-style) */
+    .pms-cal-scroll { overflow-x: auto; border: 1px solid #e2e8f0; border-radius: 8px; background: white; }
+    .pms-cal-inner { display: inline-block; min-width: 100%; }
+    .pms-cal-row { display: flex; border-bottom: 1px solid #f1f5f9; }
+    .pms-cal-row:last-child { border-bottom: none; }
+    .pms-cal-row .pms-label {
+      width: 220px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; font-weight: 500;
+      position: sticky; left: 0; background: white; z-index: 2;
+      border-right: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: space-between;
+    }
+    .pms-cal-row.wslr-row .pms-label { background: #ecfdf5; }
+    .pms-cal-row .pms-label .count { font-size: 11px; color: #94a3b8; font-weight: 400; }
+    .pms-cal-row .pms-cells { display: flex; flex-wrap: nowrap; }
+    .pms-cell {
+      width: 44px; height: 32px; flex-shrink: 0;
+      border-right: 1px solid #f1f5f9;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 600;
+      position: relative;
+    }
+    .pms-cell.weekend-col { background: #f8fafc; }
+    .pms-cell.avail { color: #059669; }
+    .pms-cell.sold-out { color: #cbd5e1; }
+    .pms-cell.no-data { color: #cbd5e1; font-weight: 400; }
+    .pms-cell:hover { background: #f1f5f9 !important; outline: 2px solid #0f172a; outline-offset: -1px; z-index: 1; }
+    .pms-cell.has-event::before {
+      content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+    }
+    .pms-header-cell {
+      width: 44px; height: 22px; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: #64748b; font-weight: 500;
+      border-right: 1px solid #f1f5f9;
+    }
+    .pms-header-cell.weekend-col { background: #f1f5f9; color: #0f172a; font-weight: 700; }
+    .pms-month-cell {
+      height: 22px; font-size: 11px; font-weight: 700; color: #1e293b;
+      display: flex; align-items: center; padding-left: 4px;
+      border-right: 1px solid #e2e8f0; text-transform: uppercase; flex-shrink: 0;
+      background: #f8fafc;
+    }
+    .pms-event-row { background: #fafafa; border-bottom: 1px solid #e2e8f0; }
+    .pms-event-row .pms-label { background: #fafafa; }
+    .pms-event-band {
+      height: 24px; padding: 0 8px;
+      display: flex; align-items: center;
+      font-size: 11px; font-weight: 600; color: #0f172a;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      border-right: 1px solid white;
+    }
+
+    /* Scrape progress indicator */
+    .scrape-pulse {
+      display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+      background: #10b981; margin-right: 6px;
+      animation: pulseDot 1.4s ease-in-out infinite;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.6); }
+    }
+    .scrape-status-active {
+      background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46;
+      padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
+      display: inline-flex; align-items: center;
+    }
   </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
@@ -88,12 +155,16 @@
     <header class="mb-6 flex items-start justify-between flex-wrap gap-4">
       <div>
         <h1 class="text-3xl font-bold tracking-tight">WSLR Competitor Tracker</h1>
-        <p class="text-sm text-slate-500 mt-1" id="lastUpdated">Loading…</p>
+        <div class="flex items-center gap-2 mt-1 flex-wrap">
+          <p class="text-sm text-slate-500" id="lastUpdated">Loading…</p>
+          <span id="scrapeStatusPill" class="hidden"></span>
+        </div>
       </div>
       <div class="flex gap-2 items-center flex-wrap">
         <button id="btnPerNight" class="px-4 py-2 rounded-md font-medium text-sm bg-slate-900 text-white">Per night</button>
         <button id="btnTotal"    class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700">Stay total</button>
         <button id="btnExportCsv" onclick="exportCSV()" class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700 hover:bg-slate-100">Export CSV</button>
+        <button onclick="openEventsModal()" class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700 hover:bg-slate-100">Events</button>
         <button onclick="openAdmin()" class="px-4 py-2 rounded-md font-medium text-sm bg-emerald-600 text-white">Manage properties</button>
         <button id="btnRunScrape" onclick="openScrapeModal()" class="px-4 py-2 rounded-md font-medium text-sm bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200">Run scrape…</button>
       </div>
@@ -180,17 +251,17 @@
       </div>
       <div class="p-6">
 
-        <!-- Piece A -->
+        <!-- Piece A: PMS-style availability calendar -->
         <div class="mb-10">
-          <h3 class="font-semibold text-sm mb-1 text-slate-700">WSLR room-type availability</h3>
-          <p class="text-xs text-slate-500 mb-3">For each WSLR room type and each date, was it bookable in the latest scrape? Hover any cell for the rate.</p>
-          <div id="wslrAvailContainer"></div>
-          <div class="text-xs text-slate-500 mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-            <span><span class="legend-swatch" style="background: hsl(140, 60%, 55%)"></span>bookable</span>
-            <span><span class="legend-swatch" style="background: #475569"></span>this type sold out</span>
-            <span><span class="legend-swatch" style="background: #1e293b"></span>all WSLR sold out</span>
-            <span><span class="legend-swatch" style="background: #f8fafc; border: 1px solid #e2e8f0"></span>no data</span>
+          <div class="flex items-center justify-between mb-1 flex-wrap gap-2">
+            <h3 class="font-semibold text-sm text-slate-700">WSLR availability calendar</h3>
+            <div class="text-xs text-slate-500">
+              <span class="inline-flex items-center mr-3"><span class="legend-swatch" style="background: #059669"></span>rate shown = bookable</span>
+              <span class="inline-flex items-center mr-3"><span class="legend-swatch" style="background: #cbd5e1"></span>&mdash; = sold out / no data</span>
+            </div>
           </div>
+          <p class="text-xs text-slate-500 mb-3">Rate per night for each WSLR room type, latest scrape. Numbers in parentheses next to each room name are total units WSLR owns. Coloured bands above the dates show events (manage via the <strong>Events</strong> button up top).</p>
+          <div id="wslrCalContainer"></div>
         </div>
 
         <!-- Piece A2: Per-property room-type breakdown -->
@@ -214,6 +285,23 @@
           <div id="selloutLeadContainer"></div>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Phase 7: Rate trajectory for a single check-in date -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Rate trajectory</h2>
+        <p class="text-sm text-slate-500 mt-1">Pick a check-in date below to see how each property's rate for that night has moved over every scrape we've taken. Reveals when properties dropped or hiked prices for that date.</p>
+      </div>
+      <div class="p-6">
+        <div class="flex items-center gap-3 flex-wrap mb-4">
+          <label class="text-xs uppercase tracking-wide text-slate-500">Check-in date:</label>
+          <select id="trajectoryDate" class="text-sm border border-slate-300 rounded px-3 py-1.5"></select>
+          <div class="text-xs text-slate-500" id="trajectoryMeta"></div>
+        </div>
+        <canvas id="trajectoryChart" height="120"></canvas>
+        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date yet. Pick another date or wait for more scrapes.</div>
       </div>
     </div>
 
@@ -290,6 +378,46 @@
           <button onclick="closeScrapeModal()" class="px-4 py-2 rounded text-sm font-medium bg-white border border-slate-300 text-slate-700">Cancel</button>
           <button id="btnSubmitScrape" onclick="submitScrape()" class="px-4 py-2 rounded text-sm font-medium bg-amber-500 text-white hover:bg-amber-600">Trigger scrape</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Events modal (Phase 8) -->
+  <div id="eventsModal" class="fixed inset-0 modal-backdrop hidden items-start justify-center z-50 overflow-y-auto py-8" onclick="if(event.target===this)closeEventsModal()">
+    <div class="bg-white rounded-lg shadow-xl max-w-3xl w-full mx-4 my-8">
+      <div class="modal-sticky-header flex justify-between items-center p-6 rounded-t-lg">
+        <h3 class="text-lg font-semibold">Events &amp; date annotations</h3>
+        <button onclick="closeEventsModal()" class="text-slate-500 hover:text-slate-900 text-3xl leading-none px-3 py-1 hover:bg-slate-100 rounded">×</button>
+      </div>
+      <div class="p-6 pt-2">
+        <p class="text-xs text-slate-500 mb-4">Add events, holidays, basketball weekends, min-stay restrictions, etc. They'll show as coloured bands above the WSLR availability calendar so it's obvious why prices/inventory change.</p>
+
+        <div class="mb-6 p-4 bg-slate-50 rounded border border-slate-200">
+          <h4 class="font-medium mb-3 text-sm">Add a new event</h4>
+          <div class="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">Start</label>
+              <input type="date" id="newEventStart" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+            </div>
+            <div>
+              <label class="text-xs uppercase tracking-wide text-slate-500 block mb-1">End (same day for 1-day events)</label>
+              <input type="date" id="newEventEnd" class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+            </div>
+          </div>
+          <input id="newEventLabel" type="text" placeholder="Label (e.g. Basketball Tournament, June long weekend, 3 night min stay)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm mb-3">
+          <div class="flex items-center gap-3 mb-3">
+            <label class="text-xs uppercase tracking-wide text-slate-500">Colour:</label>
+            <div id="eventColorPicker" class="flex gap-1.5"></div>
+          </div>
+          <input id="newEventNotes" type="text" placeholder="Notes (optional)" class="w-full border border-slate-300 rounded px-3 py-2 text-sm mb-3">
+          <div class="flex justify-end">
+            <button onclick="addEvent()" class="px-4 py-2 rounded bg-slate-900 text-white text-sm font-medium">Add event</button>
+          </div>
+          <div id="eventMsg" class="text-sm mt-2 hidden"></div>
+        </div>
+
+        <h4 class="font-medium mb-2 text-sm">Current events</h4>
+        <div id="eventsList" class="space-y-2"></div>
       </div>
     </div>
   </div>
@@ -371,25 +499,36 @@
     ];
 
     // ==================================================================
-    //  WSLR room-type universe — used by the Inventory section to know
-    //  what "all your room types" means. Keep in sync with WSLR's actual
-    //  Booking.com listings.
+    //  WSLR room-type universe — used by the Inventory section.
+    //  Order here matches WSLR's PMS view (premium first, basic last).
+    //  WSLR_ROOM_COUNTS = total units of each type WSLR owns (edit to match real inventory).
+    //  These counts only appear as a label on the row; we can't tell exact remaining
+    //  units per night from Booking.com, only "at least 1 available" or "sold out".
     // ==================================================================
     const WSLR_ROOM_TYPES = [
-      'Open Plan Motel Style Air Conditioned Cabin',
-      'One-Bedroom Apartment with Air-Conditioning',
-      'One-Bedroom Apartment with Private Terrace and Air-conditioning',
-      'Two-Bedroom Apartment with Air-conditioning',
       'Two-Bedroom Apartment with Terrace and Air-conditioning',
       'Two-Bedroom Bungalow with Air-conditioning',
+      'Two-Bedroom Apartment with Air-conditioning',
+      'One-Bedroom Apartment with Private Terrace and Air-conditioning',
+      'One-Bedroom Apartment with Air-Conditioning',
+      'Open Plan Motel Style Air Conditioned Cabin',
     ];
     const WSLR_ROOM_LABELS = {
-      'Open Plan Motel Style Air Conditioned Cabin': 'Motel Cabin',
-      'One-Bedroom Apartment with Air-Conditioning': '1BR Apt',
-      'One-Bedroom Apartment with Private Terrace and Air-conditioning': '1BR Apt + Terrace',
-      'Two-Bedroom Apartment with Air-conditioning': '2BR Apt',
       'Two-Bedroom Apartment with Terrace and Air-conditioning': '2BR Apt + Terrace',
-      'Two-Bedroom Bungalow with Air-conditioning': '2BR Bungalow',
+      'Two-Bedroom Bungalow with Air-conditioning': 'Bungalow',
+      'Two-Bedroom Apartment with Air-conditioning': '2BR Apt',
+      'One-Bedroom Apartment with Private Terrace and Air-conditioning': '1BR Apt + Terrace',
+      'One-Bedroom Apartment with Air-Conditioning': '1BR Apt',
+      'Open Plan Motel Style Air Conditioned Cabin': 'Motel Cabin',
+    };
+    // Edit these numbers to match WSLR's real total inventory per type:
+    const WSLR_ROOM_COUNTS = {
+      'Two-Bedroom Apartment with Terrace and Air-conditioning': 3,
+      'Two-Bedroom Bungalow with Air-conditioning': 5,
+      'Two-Bedroom Apartment with Air-conditioning': 8,
+      'One-Bedroom Apartment with Private Terrace and Air-conditioning': 6,
+      'One-Bedroom Apartment with Air-Conditioning': 33,
+      'Open Plan Motel Style Air Conditioned Cabin': 36,
     };
 
     const ROOM_KEYWORD_RE = /\b(?:room|suite|apartment|cabin|studio|bungalow|bedroom|loft|villa|cottage|penthouse|chalet|townhouse|residence|dorm)\b/i;
@@ -417,11 +556,27 @@
     let properties = [];
     let chart = null;
     let depthChart = null;
+    let trajectoryChart = null;
     let cachedDateMap = null;
     let loadToken = 0;
     let currentGroupIdx = 0;
+    let events = [];
+    let lastScrapeRowCount = null;
+    let scrapeProgressTimer = null;
     const TABLE_CAP = 30;
     const CHART_CAP = 30;
+
+    const EVENT_COLORS = [
+      { name: 'Yellow',  hex: '#fde68a' },
+      { name: 'Purple',  hex: '#e9d5ff' },
+      { name: 'Pink',    hex: '#fbcfe8' },
+      { name: 'Orange',  hex: '#fed7aa' },
+      { name: 'Green',   hex: '#bbf7d0' },
+      { name: 'Blue',    hex: '#bfdbfe' },
+      { name: 'Red',     hex: '#fecaca' },
+      { name: 'Slate',   hex: '#e2e8f0' },
+    ];
+    let selectedEventColor = EVENT_COLORS[0].hex;
 
     function fmtAUD(n) { if (n == null) return '<span class="na">—</span>'; return 'AU$' + Math.round(n); }
     function fmtDate(s) {
@@ -737,10 +892,13 @@
       }
       document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
       document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
+      const trajSel = document.getElementById('trajectoryDate');
+      if (trajSel) trajSel.addEventListener('change', renderTrajectory);
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           if (!document.getElementById('adminModal').classList.contains('hidden')) closeAdmin();
           if (!document.getElementById('scrapeModal').classList.contains('hidden')) closeScrapeModal();
+          if (!document.getElementById('eventsModal').classList.contains('hidden')) closeEventsModal();
         }
       });
     });
@@ -775,6 +933,9 @@
       if (pErr) { document.getElementById('lastUpdated').textContent = 'Error loading properties: ' + pErr.message; return; }
       properties = props || [];
 
+      await fetchEvents();
+      if (myToken !== loadToken) return;
+
       const startStr = fmtYMD(rangeStartDate);
       const endStr   = fmtYMD(rangeEndDate);
       const { data, error } = await fetchAllRates(startStr, endStr);
@@ -784,6 +945,16 @@
       cachedDateMap = null;
       renderGroupPills();
       render();
+    }
+
+    async function fetchEvents() {
+      const { data, error } = await sb.from('events').select('*').order('start_date', { ascending: true });
+      if (error) {
+        console.warn('Failed to load events:', error.message);
+        events = [];
+        return;
+      }
+      events = data || [];
     }
 
     function pickCheapestByPatterns(rows, patterns) {
@@ -1049,6 +1220,8 @@
       renderInventory();
       renderTrends(allDates);
       renderTopMovers(allDates);
+      populateTrajectoryDates(allDates);
+      renderTrajectory();
     }
 
     function renderCoverageNote(allDates) {
@@ -1446,14 +1619,14 @@
     //  INVENTORY RENDERS (Phase 6 — A + B + C)
     // ==================================================================
     function renderInventory() {
-      renderWslrAvailability();
+      renderWslrCalendar();
       renderPerPropertyInventory();
       renderInventoryDepth();
       renderSelloutLead();
     }
 
-    function renderWslrAvailability() {
-      const container = document.getElementById('wslrAvailContainer');
+    function renderWslrCalendar() {
+      const container = document.getElementById('wslrCalContainer');
       const data = buildWslrAvailability();
       if (!data) {
         container.innerHTML = '<p class="text-sm text-slate-500">No WSLR data found in this range.</p>';
@@ -1465,6 +1638,9 @@
         return;
       }
 
+      const CELL_W = 44;
+
+      // Month, day-of-week, and day-of-month header rows
       const monthGroups = [];
       let curMonth = null, curCount = 0;
       for (const d of sortedDates) {
@@ -1480,67 +1656,105 @@
       const monthLabels = monthGroups.map(g => {
         const [y, m] = g.key.split('-').map(Number);
         const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short', year: '2-digit' });
-        return `<div class="month-label" style="width: ${g.count * 18}px">${name}</div>`;
+        return `<div class="pms-month-cell" style="width: ${g.count * CELL_W}px">${name}</div>`;
+      }).join('');
+
+      const dowLabels = sortedDates.map(d => {
+        const dt = new Date(d + 'T00:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 5 || dow === 6;
+        const dowStr = dt.toLocaleDateString('en-AU', { weekday: 'short' });
+        return `<div class="pms-header-cell ${isWeekend ? 'weekend-col' : ''}">${dowStr}</div>`;
       }).join('');
 
       const dayLabels = sortedDates.map(d => {
         const dt = new Date(d + 'T00:00:00');
         const dow = dt.getDay();
         const isWeekend = dow === 5 || dow === 6;
-        return `<div class="day-label ${isWeekend ? 'weekend' : ''}">${dt.getDate()}</div>`;
+        return `<div class="pms-header-cell ${isWeekend ? 'weekend-col' : ''}" style="font-weight: 600; color: #0f172a;">${dt.getDate()}</div>`;
       }).join('');
 
+      // Events row (Phase 8) — colored bands over date ranges
+      const eventCells = sortedDates.map(d => {
+        const dt = new Date(d + 'T00:00:00');
+        const dow = dt.getDay();
+        const isWeekend = dow === 5 || dow === 6;
+        const matching = events.filter(e => {
+          const s = new Date(e.start_date + 'T00:00:00');
+          const eDate = new Date(e.end_date + 'T00:00:00');
+          return dt >= s && dt <= eDate;
+        });
+        if (matching.length === 0) {
+          return `<div class="pms-header-cell ${isWeekend ? 'weekend-col' : ''}" style="height: 24px;"></div>`;
+        }
+        // Combine labels + use first event's color as background
+        const labels = matching.map(e => e.label).join(' · ');
+        const color = matching[0].color || '#fde68a';
+        return `<div class="pms-event-band" style="width: ${CELL_W}px; background: ${color};" title="${escAttr(labels)}"></div>`;
+      }).join('');
+
+      // Per-room rows
       const propRows = WSLR_ROOM_TYPES.map(rt => {
         const label = WSLR_ROOM_LABELS[rt] || rt;
+        const count = WSLR_ROOM_COUNTS[rt];
         const cells = sortedDates.map(d => {
+          const dt = new Date(d + 'T00:00:00');
+          const dow = dt.getDay();
+          const isWeekend = dow === 5 || dow === 6;
           const cell = data[d].find(c => c.room === rt);
-          if (!cell) return `<div class="inv-heat-cell empty"></div>`;
-          if (cell.status === 'available') {
-            return `<div class="inv-heat-cell available" title="${escAttr(label)} · ${fmtDate(d)}: AU$${Math.round(cell.rate)}/night"></div>`;
+          const weekendCls = isWeekend ? 'weekend-col' : '';
+          if (!cell || cell.status === 'soldOut' || cell.status === 'fullSoldOut') {
+            const fullSoldOut = cell && cell.status === 'fullSoldOut';
+            const title = fullSoldOut ? `${label} · ${fmtDate(d)}: ALL WSLR sold out` :
+                          cell ? `${label} · ${fmtDate(d)}: sold out` :
+                          `${label} · ${fmtDate(d)}: no data`;
+            return `<div class="pms-cell sold-out ${weekendCls}" title="${escAttr(title)}">—</div>`;
           }
-          if (cell.status === 'fullSoldOut') {
-            return `<div class="inv-heat-cell sold-out-full" title="${escAttr(label)} · ${fmtDate(d)}: ALL WSLR sold out"></div>`;
-          }
-          return `<div class="inv-heat-cell sold-out-specific" title="${escAttr(label)} · ${fmtDate(d)}: sold out (other types may still be available)"></div>`;
+          const rateStr = Math.round(cell.rate);
+          return `<div class="pms-cell avail ${weekendCls}" title="${escAttr(label)} · ${fmtDate(d)}: AU$${rateStr}/night">${rateStr}</div>`;
         }).join('');
-        return `<div class="heat-row inv-heat-row">
-          <div class="row-label wslr">
-            <div>${escAttr(label)}</div>
+        return `<div class="pms-cal-row wslr-row">
+          <div class="pms-label">
+            <span>${escAttr(label)}</span>
+            ${count != null ? `<span class="count">(${count})</span>` : ''}
           </div>
-          <div class="cells-container">${cells}</div>
+          <div class="pms-cells">${cells}</div>
         </div>`;
       }).join('');
 
-      let totalAvailable = 0, totalSpecificSoldOut = 0, totalFullSoldOut = 0;
+      // Quick summary stats above the calendar
+      let totalAvailable = 0, totalSoldOut = 0;
       for (const d of sortedDates) {
         for (const cell of data[d]) {
           if (cell.status === 'available') totalAvailable++;
-          else if (cell.status === 'fullSoldOut') totalFullSoldOut++;
-          else totalSpecificSoldOut++;
+          else totalSoldOut++;
         }
       }
       const totalCells = sortedDates.length * WSLR_ROOM_TYPES.length;
       const pct = (n) => Math.round(n / Math.max(1, totalCells) * 100);
 
       container.innerHTML = `
-        <div class="grid grid-cols-3 gap-3 mb-3">
+        <div class="grid grid-cols-2 gap-3 mb-3">
           <div class="bg-emerald-50 rounded border border-emerald-200 p-3">
             <div class="text-xs uppercase tracking-wide text-emerald-700">Bookable cells</div>
             <div class="text-xl font-bold mt-1 text-emerald-700">${totalAvailable} <span class="text-xs font-normal text-slate-500">(${pct(totalAvailable)}%)</span></div>
+            <div class="text-xs text-slate-500">${sortedDates.length} dates × ${WSLR_ROOM_TYPES.length} types = ${totalCells} cells</div>
           </div>
           <div class="bg-slate-100 rounded border border-slate-200 p-3">
-            <div class="text-xs uppercase tracking-wide text-slate-600">Type-specific sold out</div>
-            <div class="text-xl font-bold mt-1">${totalSpecificSoldOut} <span class="text-xs font-normal text-slate-500">(${pct(totalSpecificSoldOut)}%)</span></div>
-          </div>
-          <div class="bg-slate-200 rounded border border-slate-300 p-3">
-            <div class="text-xs uppercase tracking-wide text-slate-700">Fully sold out</div>
-            <div class="text-xl font-bold mt-1">${totalFullSoldOut} <span class="text-xs font-normal text-slate-500">(${pct(totalFullSoldOut)}%)</span></div>
+            <div class="text-xs uppercase tracking-wide text-slate-600">Sold out / no data</div>
+            <div class="text-xl font-bold mt-1">${totalSoldOut} <span class="text-xs font-normal text-slate-500">(${pct(totalSoldOut)}%)</span></div>
+            <div class="text-xs text-slate-500">${events.length} events configured</div>
           </div>
         </div>
-        <div class="heatmap-scroll border border-slate-200">
-          <div class="heatmap-inner">
-            <div class="heat-row inv-heat-row header-row"><div class="row-label"></div><div class="cells-container">${monthLabels}</div></div>
-            <div class="heat-row inv-heat-row header-row"><div class="row-label"></div><div class="cells-container">${dayLabels}</div></div>
+        <div class="pms-cal-scroll">
+          <div class="pms-cal-inner">
+            <div class="pms-cal-row"><div class="pms-label" style="background: #f8fafc;"></div><div class="pms-cells">${monthLabels}</div></div>
+            <div class="pms-cal-row"><div class="pms-label"></div><div class="pms-cells">${dowLabels}</div></div>
+            <div class="pms-cal-row"><div class="pms-label"></div><div class="pms-cells">${dayLabels}</div></div>
+            <div class="pms-cal-row pms-event-row">
+              <div class="pms-label" style="font-size: 11px; color: #64748b; font-weight: 500;">Events</div>
+              <div class="pms-cells">${eventCells}</div>
+            </div>
             ${propRows}
           </div>
         </div>
@@ -1810,6 +2024,260 @@
       }).join('');
     }
 
+    // ==================================================================
+    //  EVENTS ADMIN (Phase 8)
+    // ==================================================================
+    function openEventsModal() {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const next7 = new Date(today); next7.setDate(today.getDate() + 7);
+      document.getElementById('newEventStart').value = fmtYMD(today);
+      document.getElementById('newEventEnd').value = fmtYMD(today);
+      document.getElementById('newEventLabel').value = '';
+      document.getElementById('newEventNotes').value = '';
+      document.getElementById('eventMsg').classList.add('hidden');
+      selectedEventColor = EVENT_COLORS[0].hex;
+      renderEventColorPicker();
+      renderEventsList();
+      const m = document.getElementById('eventsModal');
+      m.classList.remove('hidden'); m.classList.add('flex');
+    }
+
+    function closeEventsModal() {
+      const m = document.getElementById('eventsModal');
+      m.classList.add('hidden'); m.classList.remove('flex');
+      load();
+    }
+
+    function renderEventColorPicker() {
+      const html = EVENT_COLORS.map(c => {
+        const selected = c.hex === selectedEventColor ? 'outline outline-2 outline-slate-900' : 'border border-slate-300';
+        return `<button type="button" onclick="pickEventColor('${c.hex}')" title="${c.name}" class="w-7 h-7 rounded-full ${selected}" style="background: ${c.hex};"></button>`;
+      }).join('');
+      document.getElementById('eventColorPicker').innerHTML = html;
+    }
+    function pickEventColor(hex) {
+      selectedEventColor = hex;
+      renderEventColorPicker();
+    }
+
+    async function renderEventsList() {
+      await fetchEvents();
+      const container = document.getElementById('eventsList');
+      if (!events || events.length === 0) {
+        container.innerHTML = '<p class="text-sm text-slate-500 italic py-2">No events configured yet.</p>';
+        return;
+      }
+      container.innerHTML = events.map(e => {
+        const sameDay = e.start_date === e.end_date;
+        const range = sameDay ? fmtDate(e.start_date) : `${fmtDate(e.start_date)} → ${fmtDate(e.end_date)}`;
+        return `
+          <div class="border border-slate-200 rounded p-3 flex items-center gap-3">
+            <div class="w-6 h-6 rounded flex-shrink-0" style="background: ${e.color || '#fde68a'}; border: 1px solid #e2e8f0;"></div>
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-sm">${escAttr(e.label)}</div>
+              <div class="text-xs text-slate-500">${range}${e.notes ? ' · ' + escAttr(e.notes) : ''}</div>
+            </div>
+            <button onclick="deleteEvent(${e.id}, '${e.label.replace(/'/g, "\\'")}')" class="text-xs px-2 py-1 rounded border border-rose-300 text-rose-600 hover:bg-rose-50">Delete</button>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function addEvent() {
+      const start = document.getElementById('newEventStart').value;
+      const end = document.getElementById('newEventEnd').value || start;
+      const label = document.getElementById('newEventLabel').value.trim();
+      const notes = document.getElementById('newEventNotes').value.trim();
+      const msg = document.getElementById('eventMsg');
+      msg.classList.remove('hidden');
+      if (!start) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = 'Start date required.'; return; }
+      if (!label) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = 'Label required.'; return; }
+      if (new Date(end) < new Date(start)) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = 'End must be on or after start.'; return; }
+      const { error } = await sb.from('events').insert({
+        start_date: start, end_date: end, label, color: selectedEventColor, notes: notes || null,
+      });
+      if (error) { msg.className = 'text-sm mt-2 text-rose-600'; msg.textContent = error.message; return; }
+      msg.className = 'text-sm mt-2 text-emerald-600';
+      msg.textContent = `Added "${label}".`;
+      document.getElementById('newEventLabel').value = '';
+      document.getElementById('newEventNotes').value = '';
+      renderEventsList();
+    }
+
+    async function deleteEvent(id, label) {
+      if (!confirm(`Delete event "${label}"?`)) return;
+      const { error } = await sb.from('events').delete().eq('id', id);
+      if (error) { alert(error.message); return; }
+      renderEventsList();
+    }
+
+    // ==================================================================
+    //  PHASE 7 — RATE TRAJECTORY (per-date time-series across scrapes)
+    // ==================================================================
+    function populateTrajectoryDates(allDates) {
+      const sel = document.getElementById('trajectoryDate');
+      if (!sel) return;
+      const prevValue = sel.value;
+      if (!allDates || allDates.length === 0) {
+        sel.innerHTML = '<option value="">No dates in range</option>';
+        return;
+      }
+      sel.innerHTML = allDates.map(d => `<option value="${d.check_in}">${fmtDate(d.check_in)}${d.nights && d.nights !== '1' ? ' (' + d.nights + 'n)' : ''}</option>`).join('');
+      if (prevValue && allDates.some(d => d.check_in === prevValue)) {
+        sel.value = prevValue;
+      }
+    }
+
+    function buildTrajectory(checkInDate) {
+      // For one check_in date, group all rows by (property, scrape_run_id),
+      // take cheapest per group, sort scrape_runs chronologically.
+      const rows = allRows.filter(r => r.check_in === checkInDate);
+      if (rows.length === 0) return null;
+      // property -> scrape_run_id -> { scraped_at, cheapestRate }
+      const byProp = {};
+      for (const r of rows) {
+        if (!byProp[r.property]) byProp[r.property] = {};
+        if (!byProp[r.property][r.scrape_run_id]) {
+          byProp[r.property][r.scrape_run_id] = { scraped_at: r.scraped_at, rate: r.rate };
+        } else {
+          const slot = byProp[r.property][r.scrape_run_id];
+          if (r.rate != null && (slot.rate == null || r.rate < slot.rate)) slot.rate = r.rate;
+        }
+      }
+      // Convert to series: property -> sorted [{ scraped_at, rate }]
+      const series = {};
+      const allScrapeTimes = new Set();
+      for (const property of Object.keys(byProp)) {
+        const points = Object.values(byProp[property])
+          .map(p => ({ scraped_at: p.scraped_at, rate: p.rate }))
+          .sort((a, b) => a.scraped_at.localeCompare(b.scraped_at));
+        series[property] = points;
+        points.forEach(p => allScrapeTimes.add(p.scraped_at));
+      }
+      return { series, scrapeTimes: [...allScrapeTimes].sort() };
+    }
+
+    function renderTrajectory() {
+      const sel = document.getElementById('trajectoryDate');
+      const meta = document.getElementById('trajectoryMeta');
+      const empty = document.getElementById('trajectoryEmpty');
+      const canvas = document.getElementById('trajectoryChart');
+      if (!sel || !canvas) return;
+      const checkInDate = sel.value;
+      if (!checkInDate) {
+        empty.classList.remove('hidden');
+        canvas.style.display = 'none';
+        meta.textContent = '';
+        if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
+        return;
+      }
+      const data = buildTrajectory(checkInDate);
+      if (!data || Object.keys(data.series).length === 0) {
+        empty.classList.remove('hidden');
+        canvas.style.display = 'none';
+        meta.textContent = '';
+        if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
+        return;
+      }
+      empty.classList.add('hidden');
+      canvas.style.display = '';
+      meta.textContent = `${data.scrapeTimes.length} scrapes captured for ${fmtDate(checkInDate)}`;
+
+      const labels = data.scrapeTimes.map(t => {
+        const dt = new Date(t);
+        return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ' ' + dt.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false });
+      });
+      const palette = {
+        'WSLR (us)': '#10b981',
+        'Novotel Wollongong': '#6366f1',
+        'Quality Suites Pioneer Sands': '#f59e0b',
+        'Sage Hotel': '#ef4444',
+        'Surfside 22': '#0891b2',
+        'Corrimal Beach Tourist Park': '#a855f7',
+      };
+      const wslr = wslrName();
+      const propsSorted = Object.keys(data.series).sort((a, b) => {
+        if (a === wslr) return -1;
+        if (b === wslr) return 1;
+        return a.localeCompare(b);
+      });
+      const datasets = propsSorted.map(p => {
+        const series = data.series[p];
+        const pointMap = {};
+        series.forEach(pt => { pointMap[pt.scraped_at] = pt.rate; });
+        return {
+          label: p,
+          data: data.scrapeTimes.map(t => pointMap[t] != null ? pointMap[t] : null),
+          borderColor: palette[p] || '#94a3b8',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 3,
+          borderWidth: p === wslr ? 3 : 2,
+          spanGaps: true,
+        };
+      });
+      if (trajectoryChart) trajectoryChart.destroy();
+      trajectoryChart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'bottom' },
+            tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) : 'sold out / no data') } },
+          },
+          scales: {
+            y: { beginAtZero: false, title: { display: true, text: 'AU$ per night' }, ticks: { callback: v => 'AU$' + v } },
+            x: { title: { display: true, text: 'Scrape timestamp' } },
+          },
+        },
+      });
+    }
+
+    // ==================================================================
+    //  SCRAPE PROGRESS INDICATOR
+    // ==================================================================
+    async function pollScrapeProgress() {
+      try {
+        const { data: latestArr } = await sb
+          .from('competitor_room_rates')
+          .select('scrape_run_id, scraped_at')
+          .order('scraped_at', { ascending: false })
+          .limit(1);
+        if (!latestArr || latestArr.length === 0) return;
+        const latest = latestArr[0];
+        const ageMs = Date.now() - new Date(latest.scraped_at).getTime();
+        const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+        const pill = document.getElementById('scrapeStatusPill');
+        if (ageMs < ACTIVE_WINDOW_MS) {
+          const { count } = await sb
+            .from('competitor_room_rates')
+            .select('*', { count: 'exact', head: true })
+            .eq('scrape_run_id', latest.scrape_run_id);
+          if (count != null) {
+            const growing = lastScrapeRowCount == null || count > lastScrapeRowCount;
+            lastScrapeRowCount = count;
+            pill.className = 'scrape-status-active';
+            pill.innerHTML = `<span class="scrape-pulse"></span>Scrape in progress · ${count.toLocaleString()} rows ingested${growing ? '' : ' (settling)'}`;
+            pill.classList.remove('hidden');
+          }
+        } else {
+          pill.classList.add('hidden');
+          lastScrapeRowCount = null;
+        }
+      } catch (err) {
+        // silent fail — don't spam errors
+      }
+    }
+
+    function startScrapeProgressPolling() {
+      pollScrapeProgress();
+      if (scrapeProgressTimer) clearInterval(scrapeProgressTimer);
+      scrapeProgressTimer = setInterval(pollScrapeProgress, 20000);
+    }
+
     function setUnit(u) {
       unit = u;
       document.getElementById('btnPerNight').className = 'px-4 py-2 rounded-md font-medium text-sm ' + (u === 'perNight' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-300 text-slate-700');
@@ -1834,6 +2302,7 @@
 
     renderGroupPills();
     setRangePreset('next30');
+    startScrapeProgressPolling();
   </script>
 </body>
 </html>
