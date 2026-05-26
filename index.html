@@ -193,6 +193,13 @@
           </div>
         </div>
 
+        <!-- Piece A2: Per-property room-type breakdown -->
+        <div class="mb-10">
+          <h3 class="font-semibold text-sm mb-1 text-slate-700">Per-property room-type breakdown</h3>
+          <p class="text-xs text-slate-500 mb-3">Every distinct accommodation type observed at each property in this range, with how many of the dates it was bookable and how often it was sold out. Sorted by &quot;most sold out first&quot;.</p>
+          <div id="perPropertyInvContainer" class="space-y-3"></div>
+        </div>
+
         <!-- Piece B -->
         <div class="mb-10">
           <h3 class="font-semibold text-sm mb-1 text-slate-700">Inventory depth &mdash; # of bookable room types per property</h3>
@@ -968,6 +975,63 @@
       });
     }
 
+    // Piece A2: Per-property breakdown — every observed room type, how often it's bookable
+    // and how often it's sold out across the selected date range. Uses the latest scrape
+    // per (property, check_in) cell.
+    function buildPerPropertyInventory() {
+      // Group by (property, check_in, scrape_run_id) → set of bookable real rooms (with rates)
+      const byCellRun = {};
+      for (const r of allRows) {
+        const k = r.property + '|' + r.check_in;
+        if (!byCellRun[k]) byCellRun[k] = {};
+        if (!byCellRun[k][r.scrape_run_id]) {
+          byCellRun[k][r.scrape_run_id] = { scraped_at: r.scraped_at, rooms: {} };
+        }
+        if (isRealRoomName(r.room_name) && r.rate != null && r.available !== false) {
+          byCellRun[k][r.scrape_run_id].rooms[r.room_name] = r.rate;
+        }
+      }
+      // Pick latest scrape per cell → property → check_in → rooms map
+      const latestByProp = {};
+      for (const k of Object.keys(byCellRun)) {
+        const [property, checkIn] = k.split('|');
+        const runs = Object.entries(byCellRun[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
+        const latest = runs[0][1];
+        if (!latestByProp[property]) latestByProp[property] = {};
+        latestByProp[property][checkIn] = latest.rooms;
+      }
+      // Compute per-room stats per property
+      const result = {};
+      for (const property of Object.keys(latestByProp)) {
+        const dates = Object.keys(latestByProp[property]);
+        const totalDates = dates.length;
+        if (totalDates === 0) continue;
+        const universe = new Set();
+        for (const checkIn of dates) {
+          for (const room of Object.keys(latestByProp[property][checkIn])) universe.add(room);
+        }
+        const rooms = [];
+        for (const room of universe) {
+          let availableDays = 0;
+          const rates = [];
+          for (const checkIn of dates) {
+            const rate = latestByProp[property][checkIn][room];
+            if (rate != null) {
+              availableDays++;
+              rates.push(rate);
+            }
+          }
+          const soldOutDays = totalDates - availableDays;
+          const soldOutPct = totalDates > 0 ? (soldOutDays / totalDates) * 100 : 0;
+          const avgRate = rates.length > 0 ? rates.reduce((s, x) => s + x, 0) / rates.length : null;
+          rooms.push({ room, totalDates, availableDays, soldOutDays, soldOutPct, avgRate });
+        }
+        rooms.sort((a, b) => b.soldOutPct - a.soldOutPct);
+        result[property] = { totalDates, rooms };
+      }
+      return result;
+    }
+
     // ==================================================================
     //  RENDER
     // ==================================================================
@@ -1383,6 +1447,7 @@
     // ==================================================================
     function renderInventory() {
       renderWslrAvailability();
+      renderPerPropertyInventory();
       renderInventoryDepth();
       renderSelloutLead();
     }
@@ -1480,6 +1545,59 @@
           </div>
         </div>
       `;
+    }
+
+    function renderPerPropertyInventory() {
+      const data = buildPerPropertyInventory();
+      const container = document.getElementById('perPropertyInvContainer');
+      if (!data || Object.keys(data).length === 0) {
+        container.innerHTML = '<p class="text-sm text-slate-500">No data available.</p>';
+        return;
+      }
+      const wslr = wslrName();
+      const propsSorted = Object.keys(data).sort((a, b) => {
+        if (a === wslr) return -1;
+        if (b === wslr) return 1;
+        return a.localeCompare(b);
+      });
+      container.innerHTML = propsSorted.map(prop => {
+        const { totalDates, rooms } = data[prop];
+        const isWslr = prop === wslr;
+        const cardCls = isWslr ? 'border-emerald-200 bg-emerald-50/40' : 'border-slate-200 bg-white';
+        const headerCls = isWslr ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-slate-50';
+        const roomRows = rooms.map(r => {
+          const availPct = r.totalDates > 0 ? (r.availableDays / r.totalDates) * 100 : 0;
+          const soldOutPctRounded = Math.round(r.soldOutPct);
+          const rateLabel = r.avgRate != null ? `avg AU$${Math.round(r.avgRate)}/n` : 'no rate';
+          const barColor = r.soldOutPct < 20 ? 'bg-emerald-400'
+                         : r.soldOutPct < 50 ? 'bg-amber-400'
+                         : 'bg-rose-400';
+          const pctColor = soldOutPctRounded >= 50 ? 'text-rose-700'
+                         : soldOutPctRounded >= 20 ? 'text-amber-700'
+                         : 'text-emerald-700';
+          return `
+            <div class="flex items-center gap-3 py-1.5 border-b border-slate-100 last:border-b-0 text-xs">
+              <div class="flex-1 min-w-0 truncate" title="${escAttr(r.room)}">${escAttr(r.room)}</div>
+              <div class="w-28 bg-slate-100 rounded h-3 relative overflow-hidden flex-shrink-0">
+                <div class="${barColor} h-full" style="width: ${availPct}%"></div>
+              </div>
+              <div class="w-36 text-right text-slate-500 flex-shrink-0">${r.availableDays} of ${r.totalDates} days · ${rateLabel}</div>
+              <div class="w-24 text-right font-medium flex-shrink-0 ${pctColor}">${soldOutPctRounded}% sold out</div>
+            </div>
+          `;
+        }).join('');
+        return `
+          <div class="border rounded ${cardCls}">
+            <div class="px-4 py-2 border-b ${headerCls} flex justify-between items-center">
+              <div class="font-medium text-sm">${escAttr(prop)}${isWslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
+              <div class="text-xs text-slate-500">${rooms.length} room ${rooms.length === 1 ? 'type' : 'types'} · ${totalDates} dates of data</div>
+            </div>
+            <div class="px-4 py-2">
+              ${roomRows || '<p class="text-xs text-slate-400 italic py-2">No real room types observed.</p>'}
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderInventoryDepth() {

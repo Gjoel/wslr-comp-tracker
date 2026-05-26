@@ -88,11 +88,15 @@ function generateDateList() {
   const cursor = new Date(startDate);
   while (cursor <= endDate) {
     const inDate = new Date(cursor);
+    const dow = inDate.getDay();  // 0=Sun, 5=Fri, 6=Sat
+    // WSLR (and similar) don't allow 1-night stays touching the weekend.
+    // Scrape 2 nights for Fri/Sat/Sun check-ins so we capture real availability.
+    const isWeekendCheckin = (dow === 5 || dow === 6 || dow === 0);
+    const nights = isWeekendCheckin ? 2 : 1;
     const outDate = new Date(inDate);
-    outDate.setDate(inDate.getDate() + 1);
-    const dow = inDate.getDay();
-    const stayType = (dow === 5 || dow === 6) ? 'weekend' : 'midweek';
-    dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType });
+    outDate.setDate(inDate.getDate() + nights);
+    const stayType = isWeekendCheckin ? 'weekend' : 'midweek';
+    dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType, nights });
     cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
@@ -119,14 +123,26 @@ function pricesFromText(text) {
     .filter(n => n >= 50 && n < 10000);
 }
 
+// Real room names always include one of these descriptors. Promo labels, price strings,
+// guest-count callouts, and discount banners don't.
+const ROOM_KEYWORD_RE = /\b(?:room|suite|apartment|cabin|studio|bungalow|bedroom|loft|villa|cottage|penthouse|chalet|townhouse|residence|dorm)\b/i;
+
 function looksLikeRoomName(line) {
   if (!line || line.length <= 3 || line.length >= 120) return false;
+  // POSITIVE filter: must contain a recognised room-type word
+  if (!ROOM_KEYWORD_RE.test(line)) return false;
+  // Anything containing a currency amount anywhere (e.g. "Original price AUD 391 Current price AUD 313")
   if (/(?:AUD|AU\$|A\$)\s*\d/i.test(line)) return false;
   if (/\$\s*\d{2,}/.test(line)) return false;
-  if (/^(?:price|from|now|was|total|today|cheapest|select|book)\b/i.test(line)) return false;
+  // Promo / restriction / availability labels (start-of-line)
+  if (/^(?:price|from|now|was|total|today|cheapest|select|book|original|only|excluded|sleeps|max)\b/i.test(line)) return false;
+  // "8% off" and similar
+  if (/^\s*\d+\s*%/i.test(line)) return false;
+  // Currency-prefixed
   if (/^(?:AUD|AU\$|A\$|\$)/i.test(line)) return false;
+  // Guest/bed counts
   if (/^\d+\s*(?:guests?|adults?|children?|beds?|nights?)/i.test(line)) return false;
-  if (/^(only \d+ left|free cancellation|breakfast included|no prepayment|max persons?:|sleeps \d+)/i.test(line)) return false;
+  if (/^(only \d+ left|free cancellation|breakfast included|no prepayment)/i.test(line)) return false;
   if (!/[a-z]/i.test(line)) return false;
   return true;
 }
@@ -219,39 +235,39 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
     const minNights       = minStayMatch ? parseInt(minStayMatch[1], 10) : null;
 
     if (isNotFound) {
-      console.log(`${tag} ✗ 404           ${property.name} ${checkIn}`);
+      console.log(`${tag} ✗ 404           ${property.name} ${checkIn} (${nights}n)`);
       return [];
     }
     if (notBookable) {
-      console.log(`${tag} ⊘ NOT BOOKABLE  ${property.name}  ${checkIn}`);
-      return [{ ...base, room_name: '(property not bookable)', rate: null, available: false, min_nights: null, notes: 'not taking bookings on booking.com' }];
+      console.log(`${tag} ⊘ NOT BOOKABLE  ${property.name}  ${checkIn} (${nights}n)`);
+      return [{ ...base, room_name: '(property not bookable)', rate: null, available: false, min_nights: null, notes: `stay_type=${stayType}; nights=${nights}; not taking bookings on booking.com` }];
     }
     if (isSoldOut || (showsAlternates && notAvailable)) {
-      console.log(`${tag} • SOLD OUT      ${property.name}  ${checkIn}`);
-      return [{ ...base, room_name: '(sold out)', rate: null, available: false, min_nights: minNights, notes: 'no availability for this night' }];
+      console.log(`${tag} • SOLD OUT      ${property.name}  ${checkIn} (${nights}n)`);
+      return [{ ...base, room_name: '(sold out)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no availability` }];
     }
 
     const { rooms, source } = await getRoomRates(page, nights);
 
-    if (minNights && minNights > 1 && rooms.length === 0) {
-      console.log(`${tag} ⊝ MIN ${minNights} NIGHTS  ${property.name}  ${checkIn}`);
-      return [{ ...base, room_name: `(min ${minNights} nights required)`, rate: null, available: false, min_nights: minNights, notes: `MNS=${minNights}` }];
+    if (minNights && minNights > nights && rooms.length === 0) {
+      console.log(`${tag} ⊝ MIN ${minNights} NIGHTS  ${property.name}  ${checkIn} (${nights}n)`);
+      return [{ ...base, room_name: `(min ${minNights} nights required)`, rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; MNS=${minNights}` }];
     }
 
     if (rooms.length === 0) {
       const prices = pricesFromText(bodyText).filter(n => n >= 150);
       if (prices.length === 0) {
-        console.log(`${tag} ⚠ NO MATCH      ${property.name}  ${checkIn}  source=${source}`);
+        console.log(`${tag} ⚠ NO MATCH      ${property.name}  ${checkIn} (${nights}n)  source=${source}`);
         try { await page.screenshot({ path: `debug-${property.slug}-${checkIn}.png`, fullPage: true }); } catch {}
-        return [{ ...base, room_name: '(extraction failed)', rate: null, available: false, min_nights: minNights, notes: `no rooms parsed; source=${source}` }];
+        return [{ ...base, room_name: '(extraction failed)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no rooms parsed; source=${source}` }];
       }
       const lowest = Math.min(...prices) / nights;
-      console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn}  AU$${lowest.toFixed(0)}/n`);
-      return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: minNights, notes: `fallback to body-text lowest; source=${source}` }];
+      console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn} (${nights}n)  AU$${lowest.toFixed(0)}/n`);
+      return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; fallback to body-text lowest; source=${source}` }];
     }
 
     const cheapest = Math.min(...rooms.map(r => r.rate));
-    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n`);
+    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${nights}n  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n`);
 
     return rooms.map(r => ({
       ...base,
@@ -259,7 +275,7 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
       rate: r.rate,
       available: true,
       min_nights: minNights,
-      notes: `stay_type=${stayType}; source=hprt-table`,
+      notes: `stay_type=${stayType}; nights=${nights}; source=hprt-table`,
     }));
   } catch (err) {
     console.log(`${tag} ✗ ERROR         ${property.name} ${checkIn}: ${err.message}`);
@@ -281,6 +297,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   }
 
   console.log(`Mode: ${TEST_MODE ? 'TEST' : 'FULL'}   Days ahead: ${DAYS_AHEAD}   Concurrency: ${CONCURRENCY}   Flush every: ${FLUSH_EVERY}`);
+  console.log(`Weekend check-ins (Fri/Sat/Sun) → 2-night stays. Other check-ins → 1-night.`);
   if (START_DATE || END_DATE) console.log(`Custom range from workflow inputs — START_DATE=${START_DATE || '(default)'}  END_DATE=${END_DATE || '(default)'}`);
   console.log(`Scrape run id: ${SCRAPE_RUN_ID}`);
   console.log(`Supabase URL: ${SUPABASE_URL}`);

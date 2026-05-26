@@ -103,6 +103,12 @@ async function main() {
   const { rateChanges, soldOutChanges } = computeDeltas(prevMap, currMap);
   console.log(`Found ${rateChanges.length} rate changes >${THRESHOLD_PCT * 100}% and ${soldOutChanges.length} sold-out flips`);
 
+  // Skip the email when there's nothing worth reporting.
+  if (rateChanges.length === 0 && soldOutChanges.length === 0) {
+    console.log('No significant changes since last scrape — skipping digest email.');
+    return;
+  }
+
   const payload = {
     summary: {
       currentRunDate: runs[0].scraped_at,
