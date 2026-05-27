@@ -14,7 +14,8 @@
     .wslr-row { background-color: #ecfdf5; }
     .cheapest { background-color: #d1fae5; }
     .most-expensive { color: #b91c1c; }
-    .na { color: #9ca3af; font-style: italic; }
+    .na { color: #9ca3af; font-style: italic; font-size: 11px; line-height: 1.2; }
+    .no-data-cell .na, .unavailable-cell .na { display: inline-block; max-width: 160px; }
     .rate-cell .room { font-size: 11px; color: #64748b; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .rate-cell .substitution { font-size: 10px; color: #b45309; margin-top: 2px; max-width: 220px; }
     .rate-cell .fallback { font-size: 10px; color: #b45309; margin-top: 2px; }
@@ -301,36 +302,41 @@
       </div>
     </div>
 
-    <!-- Phase 7: Rate trajectory across scrapes for the selected date range -->
+    <!-- Phase 7: Rate trajectory — X = scrape date, Y = total cost across selected date range -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Rate trajectory</h2>
-        <p class="text-sm text-slate-500 mt-1">Pick a property to see how its rates across the selected date range have moved across recent scrapes. Each line is one scrape, with the latest scrape highlighted &mdash; useful for questions like &ldquo;what did the June long weekend cost two weeks ago vs today?&rdquo;.</p>
+        <p class="text-sm text-slate-500 mt-1">Total cost of staying every night in your selected date range, plotted over time across scrapes. One line per property. Scrapes where a property is missing any night in the range show a gap rather than a misleading dip. Side panel breaks down which individual nights moved between the two most recent scrapes.</p>
       </div>
       <div class="p-6">
         <div class="mb-3">
           <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type:</div>
           <div id="trajectoryGroupPills" class="flex flex-wrap gap-2"></div>
         </div>
-        <div class="mb-4">
-          <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Property:</div>
-          <div id="trajectoryPropertyPills" class="flex flex-wrap gap-2"></div>
-        </div>
         <div class="flex items-center gap-3 flex-wrap mb-4">
           <label class="text-xs uppercase tracking-wide text-slate-500">Show:</label>
           <select id="trajectoryScrapeLimit" class="text-sm border border-slate-300 rounded px-3 py-1.5">
-            <option value="3">Last 3 scrapes</option>
-            <option value="5" selected>Last 5 scrapes</option>
-            <option value="10">Last 10 scrapes</option>
+            <option value="5">Last 5 scrapes</option>
+            <option value="10" selected>Last 10 scrapes</option>
             <option value="20">Last 20 scrapes</option>
-            <option value="0">All scrapes in range</option>
+            <option value="50">Last 50 scrapes</option>
+            <option value="0">All scrapes</option>
           </select>
           <div class="text-xs text-slate-500" id="trajectoryMeta"></div>
         </div>
-        <div style="position: relative; height: 360px;">
-          <canvas id="trajectoryChart"></canvas>
+        <div style="display: flex; flex-wrap: wrap; gap: 20px;">
+          <div style="flex: 2 1 520px; min-width: 0;">
+            <div style="position: relative; height: 360px;">
+              <canvas id="trajectoryChart"></canvas>
+            </div>
+            <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date range and match group yet.</div>
+          </div>
+          <div style="flex: 1 1 280px; min-width: 0;">
+            <h3 class="font-semibold text-sm mb-1 text-slate-700">Per-night moves</h3>
+            <p class="text-xs text-slate-500 mb-2">Latest scrape vs previous, in this match group + date range. Sorted by biggest swing.</p>
+            <div id="trajectoryMoves" class="border border-slate-200 rounded bg-slate-50 p-2" style="max-height: 360px; overflow-y: auto;"></div>
+          </div>
         </div>
-        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this property and date range yet.</div>
       </div>
     </div>
 
@@ -472,7 +478,7 @@
         },
       },
       {
-        group: '1-Bedroom Apt (standard)',
+        group: '1-Bedroom Cabin (standard)',
         wslrRoom: '1BR Apartment with A/C',
         rooms: {
           'WSLR (us)': ['One-Bedroom Apartment with Air-Conditioning'],
@@ -483,7 +489,7 @@
         },
       },
       {
-        group: '1-Bedroom Apt (premium)',
+        group: '1-Bedroom Cabin (terrace)',
         wslrRoom: '1BR Apartment with Private Terrace',
         rooms: {
           'WSLR (us)': ['One-Bedroom Apartment with Private Terrace and Air-conditioning'],
@@ -494,7 +500,7 @@
         },
       },
       {
-        group: '2-Bedroom Apt (standard)',
+        group: '2-Bedroom Cabin (standard)',
         wslrRoom: '2BR Apartment with A/C',
         rooms: {
           'WSLR (us)': ['Two-Bedroom Apartment with Air-conditioning'],
@@ -515,7 +521,7 @@
         },
       },
       {
-        group: '2-Bedroom Apt (premium)',
+        group: '2-Bedroom Cabin (terrace)',
         wslrRoom: '2BR Apartment with Terrace',
         rooms: {
           'WSLR (us)': ['Two-Bedroom Apartment with Terrace and Air-conditioning'],
@@ -589,7 +595,6 @@
     let cachedDateMap = null;
     let loadToken = 0;
     let currentGroupIdx = 0;
-    let currentTrajectoryProperty = null;   // selected property for the rate trajectory chart
     let events = [];
     let lastScrapeRowCount = null;
     let scrapeProgressTimer = null;
@@ -635,6 +640,112 @@
     function wslrSuffix(name, isWslr) {
       if (!isWslr) return '';
       return /\(us\)/i.test(name) ? '' : ' (us)';
+    }
+
+    // Cached structural context about what's actually in allRows so we can
+    // give meaningful "no data" reasons instead of just "—".
+    let cachedDataContext = null;
+    function getDataContext() {
+      if (cachedDataContext) return cachedDataContext;
+      // Map scrape_run_id → { scraped_at, propsDates (Set 'prop|date') }
+      const runs = {};
+      const propsSeen = new Set();
+      const datesSeen = new Set();
+      const propDatesSeen = new Set();   // 'property|check_in' over all rows
+      for (const r of allRows) {
+        if (!runs[r.scrape_run_id]) runs[r.scrape_run_id] = { scraped_at: r.scraped_at, propsDates: new Set(), props: new Set() };
+        runs[r.scrape_run_id].propsDates.add(r.property + '|' + r.check_in);
+        runs[r.scrape_run_id].props.add(r.property);
+        propsSeen.add(r.property);
+        datesSeen.add(r.check_in);
+        propDatesSeen.add(r.property + '|' + r.check_in);
+      }
+      // Most recent scrape run wins
+      const sortedRuns = Object.entries(runs).sort(([, a], [, b]) => b.scraped_at.localeCompare(a.scraped_at));
+      const latest = sortedRuns[0];
+      cachedDataContext = {
+        latestRunId: latest ? latest[0] : null,
+        latestRunPropsDates: latest ? latest[1].propsDates : new Set(),
+        latestRunProps: latest ? latest[1].props : new Set(),
+        propsSeen, datesSeen, propDatesSeen,
+      };
+      return cachedDataContext;
+    }
+
+    // Returns a short reason string explaining why no rate is showing for (property, checkIn).
+    function getNoDataReason(property, checkIn) {
+      const ctx = getDataContext();
+      const cellKey = property + '|' + checkIn;
+      // Any rows AT ALL for this (property, date) across history?
+      const everScraped = ctx.propDatesSeen.has(cellKey);
+      if (!everScraped) {
+        // Has the property been scraped at all in the latest run?
+        if (!ctx.latestRunProps.has(property)) return 'No data (property missing from latest scrape)';
+        return 'No data (date not scraped)';
+      }
+      // Rows exist for this cell at some point — inspect what happened in the latest scrape for this cell
+      const cellRowsLatest = allRows.filter(r => r.property === property && r.check_in === checkIn && r.scrape_run_id === ctx.latestRunId);
+      if (cellRowsLatest.length === 0) {
+        return 'No data (date not scraped in latest run)';
+      }
+      // Were any bookable rows present?
+      const anyBookable = cellRowsLatest.some(r => r.rate != null && r.available !== false);
+      if (!anyBookable) {
+        // All rows were sold-out / unbookable
+        const sawSoldOutMarker = cellRowsLatest.some(r => r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name)));
+        if (sawSoldOutMarker) return 'No data (property sold out)';
+        return 'No data (all rooms unavailable)';
+      }
+      // Bookable rooms existed in the scrape, but none matched the current match group's patterns
+      return 'No data (no matching room type)';
+    }
+
+    // Estimated total inventory for (property, roomName). Tries to use a quiet
+    // baseline first (midweek August scrapes — low season, likely full stock)
+    // before falling back to the global max rooms_left ever observed.
+    function getMaxInventory(property, roomName) {
+      let augMidweek = null, globalMax = null;
+      for (const r of allRows) {
+        if (r.property !== property || r.room_name !== roomName) continue;
+        if (r.rooms_left == null) continue;
+        if (globalMax == null || r.rooms_left > globalMax) globalMax = r.rooms_left;
+        const d = new Date(r.check_in + 'T00:00:00');
+        if (d.getMonth() !== 7) continue;     // August (0-indexed)
+        const dow = d.getDay();
+        if (dow < 1 || dow > 4) continue;     // Mon-Thu midweek only
+        if (augMidweek == null || r.rooms_left > augMidweek) augMidweek = r.rooms_left;
+      }
+      return augMidweek != null ? augMidweek : globalMax;
+    }
+
+    // Same as above, but across all rooms matching the property's patterns in
+    // the current match group (used for the Comparable Room Availability matrix
+    // since each cell picks the cheapest matching room — that may vary by date).
+    function getMaxInventoryForPatterns(property, patterns) {
+      if (!patterns || patterns.length === 0) return null;
+      const lower = patterns.map(p => p.toLowerCase());
+      let augMidweek = null, globalMax = null;
+      for (const r of allRows) {
+        if (r.property !== property) continue;
+        if (r.rooms_left == null || !r.room_name) continue;
+        const rn = r.room_name.toLowerCase();
+        if (!lower.some(p => rn.includes(p))) continue;
+        if (globalMax == null || r.rooms_left > globalMax) globalMax = r.rooms_left;
+        const d = new Date(r.check_in + 'T00:00:00');
+        if (d.getMonth() !== 7) continue;
+        const dow = d.getDay();
+        if (dow < 1 || dow > 4) continue;
+        if (augMidweek == null || r.rooms_left > augMidweek) augMidweek = r.rooms_left;
+      }
+      return augMidweek != null ? augMidweek : globalMax;
+    }
+
+    // Format the "max units" indicator for row labels. Booking caps at 10, so
+    // values of 10 are likely an undercount of the true total.
+    function fmtMaxLabel(max) {
+      if (max == null) return '';
+      if (max >= 10) return '10+ units';
+      return `~${max} units`;
     }
 
     // Heuristic to spot scraper unit-confusion bugs (per-night vs per-stay).
@@ -775,7 +886,6 @@
     function setMatchGroup(idx) {
       currentGroupIdx = idx;
       cachedDateMap = null;
-      currentTrajectoryProperty = null;   // reset to WSLR default for the new group
       renderGroupPills();
       render();
     }
@@ -992,6 +1102,7 @@
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
       allRows = data || [];
       cachedDateMap = null;
+      cachedDataContext = null;
       renderGroupPills();
       render();
     }
@@ -1367,8 +1478,11 @@
             if (displayed === min) cls += ' cheapest';
             else if (displayed === max) cls += ' most-expensive';
           }
-          // ---- BUG 7 FIX: no record at all - light grey + label ----
-          if (!rec) return `<td class="${cls} no-data-cell" title="No scrape data for ${escAttr(prop.name)} on ${fmtDate(d.check_in)}"><span class="na">no data</span></td>`;
+          // ---- BUG 7 FIX: no record at all - light grey + label with inferred reason ----
+          if (!rec) {
+            const reason = getNoDataReason(prop.name, d.check_in);
+            return `<td class="${cls} no-data-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
+          }
           // ---- BUG 7 FIX: rec exists but no rate - show specific reason on grey ----
           if (rec.rate == null) {
             const reason = explainNoRate(rec);
@@ -2030,6 +2144,8 @@
 
       const rows = sorted.map(prop => {
         const propCells = cells[prop.name];
+        const patterns = patternsFor(prop.name);
+        const maxInv = getMaxInventoryForPatterns(prop.name, patterns);
         const cellsHtml = dates.map(d => {
           const dt = new Date(d + 'T00:00:00');
           const dow = dt.getDay();
@@ -2037,7 +2153,8 @@
           const wkBg = isWeekend ? '#f8fafc' : 'white';
           const cell = propCells[d];
           if (!cell || cell.status === 'no_data') {
-            return `<div style="width: ${CELL_W}px; height: 24px; background: #f1f5f9; background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(148,163,184,0.25) 4px 5px); flex-shrink: 0; border-right: 1px solid #f1f5f9;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': no scrape data')}"></div>`;
+            const reason = getNoDataReason(prop.name, d);
+            return `<div style="width: ${CELL_W}px; height: 24px; background: #f1f5f9; background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(148,163,184,0.25) 4px 5px); flex-shrink: 0; border-right: 1px solid #f1f5f9;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': ' + reason)}"></div>`;
           }
           if (cell.status === 'sold_out') {
             const minTxt = (cell.minNights && cell.minNights > 1) ? ` · ${cell.minNights}-night min in effect` : '';
@@ -2047,9 +2164,16 @@
           const left = cell.roomsLeft;
           const rateLabel = `AU$${Math.round(cell.rate)}/n`;
           const minTxt = (cell.minNights && cell.minNights > 1) ? ` · ${cell.minNights}-night min` : '';
+          const maxTxt = maxInv != null ? ` of ~${maxInv}${maxInv >= 10 ? '+' : ''}` : '';
           if (left != null) {
             const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : left >= 10 ? '#0891b2' : '#059669';
-            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': ' + left + ' left · ' + rateLabel + minTxt)}">${left}</div>`;
+            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': ' + left + maxTxt + ' left · ' + rateLabel + minTxt)}">${left}</div>`;
+          }
+          // Bookable, count not shown by Booking. Use max inventory as the inferred floor.
+          if (maxInv != null) {
+            const label = maxInv >= 10 ? '10+' : '≥' + maxInv;
+            const color = maxInv >= 10 ? '#0891b2' : maxInv >= 5 ? '#059669' : '#d97706';
+            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: ${color};" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': bookable, count not shown (max ever seen: ' + maxInv + (maxInv >= 10 ? '+' : '') + ') · ' + rateLabel + minTxt)}">${label}</div>`;
           }
           return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel + minTxt)}">✓</div>`;
         }).join('');
@@ -2057,10 +2181,11 @@
         const roomLbl = roomLabelFor(prop.name);
         const roomShort = roomLbl && roomLbl.length > 28 ? roomLbl.slice(0, 28) + '…' : roomLbl;
         const tag = wslrSuffix(prop.name, prop.is_wslr);
+        const maxLbl = fmtMaxLabel(maxInv);
         return `
           <div style="display: flex; align-items: stretch; border-bottom: 1px solid #f1f5f9; ${prop.is_wslr ? 'background: #ecfdf5;' : ''}">
-            <div style="width: 220px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; position: sticky; left: 0; background: ${prop.is_wslr ? '#ecfdf5' : 'white'}; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;" title="${escAttr(prop.name + ' · ' + roomLbl)}">
-              <div class="font-medium">${escAttr(prop.name)}${tag}</div>
+            <div style="width: 220px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; position: sticky; left: 0; background: ${prop.is_wslr ? '#ecfdf5' : 'white'}; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;" title="${escAttr(prop.name + ' · ' + roomLbl + (maxLbl ? ' · ' + maxLbl : ''))}">
+              <div class="font-medium">${escAttr(prop.name)}${tag}${maxLbl ? ` <span style="font-size:10px;color:#0891b2;font-weight:500;">· ${maxLbl}</span>` : ''}</div>
               <div style="font-size: 10px; color: #64748b; margin-top: 1px;">${escAttr(roomShort)}</div>
             </div>
             <div style="display: flex; flex-wrap: nowrap;">${cellsHtml}</div>
@@ -2195,6 +2320,7 @@
         }).join('');
 
         const roomRows = rooms.map(roomName => {
+          const maxInv = getMaxInventory(prop, roomName);
           const cells = dates.map(d => {
             const dt = new Date(d + 'T00:00:00');
             const dow = dt.getDay();
@@ -2210,18 +2336,29 @@
             // Bookable
             const left = slot.roomsLeft;
             const rateLabel = `AU$${Math.round(slot.rate)}/n`;
+            const maxTxt = maxInv != null ? ` of ~${maxInv}${maxInv >= 10 ? '+' : ''}` : '';
             if (left != null) {
               // Low-stock badge — color by remaining count
-              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : '#059669';
-              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': only ' + left + ' left at this price · ' + rateLabel)}">${left}</div>`;
+              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : left >= 10 ? '#0891b2' : '#059669';
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': ' + left + maxTxt + ' left at this price · ' + rateLabel)}">${left}</div>`;
             }
-            // Bookable, count unknown
+            // Bookable, count not shown by Booking. Use max inventory as the inferred floor.
+            if (maxInv != null) {
+              const label = maxInv >= 10 ? '10+' : '≥' + maxInv;
+              const color = maxInv >= 10 ? '#0891b2' : maxInv >= 5 ? '#059669' : '#d97706';
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable, count not shown (max ever seen: ' + maxInv + (maxInv >= 10 ? '+' : '') + ') · ' + rateLabel)}">${label}</div>`;
+            }
+            // Bookable, count unknown and no max ever seen
             return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel)}">✓</div>`;
           }).join('');
           const shortName = roomName.length > 30 ? roomName.slice(0, 30) + '…' : roomName;
+          const maxLbl = fmtMaxLabel(maxInv);
           return `
             <div style="display: flex; align-items: stretch; border-bottom: 1px solid #f1f5f9;">
-              <div style="width: 200px; flex-shrink: 0; padding: 4px 10px; font-size: 11px; position: sticky; left: 0; background: white; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; align-items: center;" title="${escAttr(roomName)}">${escAttr(shortName)}</div>
+              <div style="width: 200px; flex-shrink: 0; padding: 4px 10px; font-size: 11px; position: sticky; left: 0; background: white; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;" title="${escAttr(roomName + (maxLbl ? ' · ' + maxLbl : ''))}">
+                <div>${escAttr(shortName)}</div>
+                ${maxLbl ? `<div style="font-size: 10px; color: #0891b2; font-weight: 500; margin-top: 1px;">${maxLbl}</div>` : ''}
+              </div>
               <div style="display: flex; flex-wrap: nowrap;">${cells}</div>
             </div>
           `;
@@ -2503,26 +2640,8 @@
     }
 
     // ==================================================================
-    //  RATE TRAJECTORY (one line per scrape, X = check-in dates in range)
+    //  RATE TRAJECTORY (X = scrape date, Y = total cost across range)
     // ==================================================================
-
-    // Returns the property currently selected for the trajectory chart.
-    // Falls back to WSLR if nothing selected yet.
-    function trajectoryPropertyName() {
-      const mapped = activeMappedProperties();
-      if (mapped.length === 0) return null;
-      if (currentTrajectoryProperty && mapped.some(p => p.name === currentTrajectoryProperty)) {
-        return currentTrajectoryProperty;
-      }
-      const wslr = mapped.find(p => p.is_wslr);
-      return wslr ? wslr.name : mapped[0].name;
-    }
-
-    function setTrajectoryProperty(name) {
-      currentTrajectoryProperty = name;
-      renderTrajectoryPropertyPills();
-      renderTrajectory();
-    }
 
     function renderTrajectoryGroupPills() {
       const container = document.getElementById('trajectoryGroupPills');
@@ -2532,53 +2651,108 @@
       ).join('');
     }
 
-    function renderTrajectoryPropertyPills() {
-      const container = document.getElementById('trajectoryPropertyPills');
-      if (!container) return;
-      const mapped = activeMappedProperties();
-      const selected = trajectoryPropertyName();
-      container.innerHTML = mapped.map(p => {
-        const isSel = p.name === selected;
-        const wslrCls = p.is_wslr ? ' text-emerald-700' : '';
-        return `<button class="group-pill${isSel ? ' active' : ''}${wslrCls}" onclick="setTrajectoryProperty('${p.name.replace(/'/g, "\\'")}')">${escAttr(p.name)}${wslrSuffix(p.name, p.is_wslr)}</button>`;
-      }).join('');
-    }
+    // Builds trajectory data:
+    //   For each scrape_run_id and each mapped property, sum the cheapest matching
+    //   per-night rate across every check-in date in the current dashboard range.
+    //   If a property is missing data for ANY date in the range for a given scrape,
+    //   that scrape's point is null for that property (line shows a gap).
+    // Returns: { runIds[asc by scraped_at], runStamps{runId: scraped_at}, datasetsByProp{name: total[]} }
+    function buildTrajectoryV3(allDates, mappedProps, scrapeLimit) {
+      if (allDates.length === 0 || mappedProps.length === 0) return null;
+      const dateList = allDates.map(d => d.check_in);
+      const dateSet = new Set(dateList);
 
-    // Build trajectory data for one property over the current dashboard date range.
-    //   propertyName: the single property to chart
-    //   allDates:     date objects in current range (from buildDateMap)
-    //   scrapeLimit:  number of most-recent scrapes to include (0 = all)
-    // Returns { checkInDates, scrapes: [{scraped_at, ratesByCheckIn}, ...] } newest first.
-    function buildTrajectoryV2(propertyName, allDates, scrapeLimit) {
-      if (!propertyName || allDates.length === 0) return null;
-      const patterns = patternsFor(propertyName);
-      if (!patterns) return null;
-      const checkInSet = new Set(allDates.map(d => d.check_in));
-
-      // (scrape_run_id, check_in) -> { scraped_at, cheapestMatchingRate }
-      const byScrapeDate = {};
+      // (scrape_run_id, property) -> { scraped_at, ratesByDate{date: cheapestRate} }
+      const slots = {};
       for (const r of allRows) {
-        if (r.property !== propertyName) continue;
-        if (!checkInSet.has(r.check_in)) continue;
+        if (!dateSet.has(r.check_in)) continue;
+        const propRec = mappedProps.find(p => p.name === r.property);
+        if (!propRec) continue;
+        if (r.rate == null) continue;
+        const patterns = patternsFor(r.property);
+        if (!patterns) continue;
         const rn = (r.room_name || '').toLowerCase();
         if (!patterns.some(p => rn.includes(p.toLowerCase()))) continue;
-        if (r.rate == null) continue;
-        if (!byScrapeDate[r.scrape_run_id]) byScrapeDate[r.scrape_run_id] = { scraped_at: r.scraped_at, ratesByCheckIn: {} };
-        const slot = byScrapeDate[r.scrape_run_id];
-        const existing = slot.ratesByCheckIn[r.check_in];
-        if (existing == null || r.rate < existing) slot.ratesByCheckIn[r.check_in] = r.rate;
+        const key = r.scrape_run_id + '|' + r.property;
+        if (!slots[key]) slots[key] = { scraped_at: r.scraped_at, ratesByDate: {} };
+        const cur = slots[key].ratesByDate[r.check_in];
+        if (cur == null || r.rate < cur) slots[key].ratesByDate[r.check_in] = r.rate;
       }
 
-      const scrapesAll = Object.values(byScrapeDate)
-        .filter(s => Object.keys(s.ratesByCheckIn).length > 0)
-        .sort((a, b) => b.scraped_at.localeCompare(a.scraped_at));   // newest first
-      if (scrapesAll.length === 0) return null;
-      const scrapes = scrapeLimit > 0 ? scrapesAll.slice(0, scrapeLimit) : scrapesAll;
-      return {
-        checkInDates: allDates.map(d => d.check_in),
-        scrapes,
-        totalScrapesAvailable: scrapesAll.length,
-      };
+      // Collect distinct scrape run ids with their scraped_at, sorted asc (oldest → newest)
+      const runStamps = {};
+      for (const key of Object.keys(slots)) {
+        const runId = key.split('|')[0];
+        if (!runStamps[runId] || slots[key].scraped_at < runStamps[runId]) runStamps[runId] = slots[key].scraped_at;
+      }
+      const allRunIds = Object.keys(runStamps).sort((a, b) => runStamps[a].localeCompare(runStamps[b]));
+      if (allRunIds.length === 0) return null;
+      // Apply "last N scrapes" cap
+      const runIds = (scrapeLimit > 0 && allRunIds.length > scrapeLimit) ? allRunIds.slice(-scrapeLimit) : allRunIds;
+
+      // Build per-property totals, null when any date is missing
+      const datasetsByProp = {};
+      for (const p of mappedProps) {
+        datasetsByProp[p.name] = runIds.map(runId => {
+          const slot = slots[runId + '|' + p.name];
+          if (!slot) return null;
+          let total = 0;
+          for (const d of dateList) {
+            const rate = slot.ratesByDate[d];
+            if (rate == null) return null;
+            total += rate;
+          }
+          return total;
+        });
+      }
+      return { runIds, runStamps, datasetsByProp, totalRuns: allRunIds.length, nightsInRange: dateList.length };
+    }
+
+    // Renders the side panel: per-night rate moves between the LAST two scrapes
+    // for the current match group + date range. Same filters as Top Movers.
+    function renderTrajectoryMoves(allDates) {
+      const container = document.getElementById('trajectoryMoves');
+      if (!container) return;
+      const mappedProps = activeMappedProperties();
+      const moves = [];
+      for (const d of allDates) {
+        for (const p of mappedProps) {
+          const r = d.props[p.name];
+          if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
+          if (isSubstitution(r)) continue;
+          if (isSuspiciousRateRatio(r.prev.rate, r.rate)) continue;
+          if (p.is_wslr && (r.rate < 100 || r.prev.rate < 100)) continue;
+          const delta = (r.rate - r.prev.rate) / r.prev.rate;
+          if (Math.abs(delta) < SIGNIFICANT_DELTA) continue;
+          moves.push({
+            property: p.name, isWslr: p.is_wslr, check_in: d.check_in,
+            prevRate: r.prev.rate, currRate: r.rate, delta,
+          });
+        }
+      }
+      moves.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+      const top = moves.slice(0, 15);
+      if (top.length === 0) {
+        container.innerHTML = '<p class="text-xs text-slate-500 py-3 px-2">No significant per-night moves between the two most recent scrapes (after filtering substitutions and suspicious data).</p>';
+        return;
+      }
+      container.innerHTML = top.map(m => {
+        const sign = m.delta > 0 ? '+' : '';
+        const color = m.delta > 0 ? 'text-rose-700' : 'text-emerald-700';
+        const dot = m.delta > 0 ? '#e11d48' : '#10b981';
+        return `
+          <div class="flex justify-between items-center text-xs py-1.5 px-1 border-b border-slate-200 last:border-0">
+            <div class="min-w-0 pr-2">
+              <div class="font-medium truncate ${m.isWslr ? 'text-emerald-700' : 'text-slate-800'}" title="${escAttr(m.property)}${wslrSuffix(m.property, m.isWslr)}">${escAttr(m.property)}${wslrSuffix(m.property, m.isWslr)}</div>
+              <div class="text-slate-500">${fmtDate(m.check_in)}</div>
+            </div>
+            <div class="text-right whitespace-nowrap">
+              <div class="${color} font-semibold">AU$${Math.round(m.prevRate)} → AU$${Math.round(m.currRate)}</div>
+              <div class="${color}"><span style="display:inline-block;width:6px;height:6px;background:${dot};border-radius:50%;vertical-align:middle;margin-right:3px;"></span>${sign}${(m.delta * 100).toFixed(0)}%</div>
+            </div>
+          </div>
+        `;
+      }).join('');
     }
 
     function renderTrajectory() {
@@ -2588,71 +2762,64 @@
       if (!canvas) return;
 
       renderTrajectoryGroupPills();
-      renderTrajectoryPropertyPills();
 
       const { allDates } = buildDateMap();
-      const propertyName = trajectoryPropertyName();
-      if (!propertyName || allDates.length === 0) {
+      const mappedProps = activeMappedProperties();
+      if (allDates.length === 0 || mappedProps.length === 0) {
         empty.classList.remove('hidden');
         empty.textContent = 'No data in current selection. Pick a different date range or match group.';
         canvas.style.display = 'none';
         meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
+        document.getElementById('trajectoryMoves').innerHTML = '<p class="text-xs text-slate-500 py-3 px-2">No moves data.</p>';
         return;
       }
 
       const limitSel = document.getElementById('trajectoryScrapeLimit');
-      const limit = limitSel ? parseInt(limitSel.value, 10) : 5;
-      const data = buildTrajectoryV2(propertyName, allDates, limit);
-      if (!data || data.scrapes.length === 0) {
+      const limit = limitSel ? parseInt(limitSel.value, 10) : 10;
+      const data = buildTrajectoryV3(allDates, mappedProps, limit);
+      if (!data) {
         empty.classList.remove('hidden');
-        empty.textContent = `No scrape history for ${propertyName} in this date range and match group yet.`;
+        empty.textContent = 'No scrape history yet for this date range and match group.';
         canvas.style.display = 'none';
         meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
+        renderTrajectoryMoves(allDates);
         return;
       }
       empty.classList.add('hidden');
       canvas.style.display = '';
-      const shown = data.scrapes.length;
-      const total = data.totalScrapesAvailable;
-      meta.textContent = shown === total
-        ? `${shown} scrape${shown === 1 ? '' : 's'} for ${propertyName} across ${data.checkInDates.length} date${data.checkInDates.length === 1 ? '' : 's'}`
-        : `Showing ${shown} of ${total} scrapes for ${propertyName} across ${data.checkInDates.length} dates`;
+      const shown = data.runIds.length, total = data.totalRuns;
+      meta.textContent = (shown === total)
+        ? `${shown} scrape${shown === 1 ? '' : 's'} · summing ${data.nightsInRange} night${data.nightsInRange === 1 ? '' : 's'} per scrape`
+        : `Showing ${shown} of ${total} scrapes · summing ${data.nightsInRange} night${data.nightsInRange === 1 ? '' : 's'} per scrape`;
 
-      // Build labels for X axis (check-in dates). Truncate if huge.
-      const xLabels = data.checkInDates.map(d => fmtDate(d));
-
-      // Lines: one per scrape, newest first. Color from bold (newest) to pale (oldest).
-      // Use a single hue family (emerald for WSLR, slate-blue otherwise) so it reads
-      // as "same property, different scrapes" rather than as different properties.
-      const mappedProps = activeMappedProperties();
-      const propRecord = mappedProps.find(p => p.name === propertyName);
-      const isWslrProp = propRecord && propRecord.is_wslr;
-      const baseHue = isWslrProp ? 158 : 217;   // emerald-ish vs indigo-ish
-
-      const datasets = data.scrapes.map((scrape, idx) => {
-        // idx 0 is newest → darkest. Older scrapes get lighter / more transparent.
-        const isLatest = idx === 0;
-        const tFrac = data.scrapes.length === 1 ? 0 : idx / (data.scrapes.length - 1);
-        const light = 38 + tFrac * 35;     // 38% (newest) → 73% (oldest)
-        const alpha = 1 - tFrac * 0.45;    // 1 (newest) → 0.55 (oldest)
-        const color = `hsla(${baseHue}, ${isLatest ? 70 : 50}%, ${light}%, ${alpha})`;
-        const dt = new Date(scrape.scraped_at);
-        const label = (isLatest ? 'Latest · ' : '') + dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ' ' + dt.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false });
-        return {
-          label,
-          data: data.checkInDates.map(d => scrape.ratesByCheckIn[d] != null ? scrape.ratesByCheckIn[d] : null),
-          borderColor: color,
-          backgroundColor: 'transparent',
-          tension: 0.25,
-          pointRadius: isLatest ? 4 : 2.5,
-          pointHoverRadius: 6,
-          borderWidth: isLatest ? 3 : 1.75,
-          spanGaps: true,
-          order: idx,   // newer drawn last (on top)
-        };
+      // X axis labels: scrape timestamps
+      const xLabels = data.runIds.map(runId => {
+        const dt = new Date(data.runStamps[runId]);
+        return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ' ' + dt.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false });
       });
+
+      // Palette: WSLR emerald + distinct colours for competitors
+      const palette = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#0891b2', '#a855f7', '#14b8a6', '#db2777'];
+      const wslr = wslrName();
+      const sorted = [...mappedProps].sort((a, b) => {
+        if (a.is_wslr) return -1;
+        if (b.is_wslr) return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      const datasets = sorted.map((p, i) => ({
+        label: p.name + wslrSuffix(p.name, p.is_wslr),
+        data: data.datasetsByProp[p.name],
+        borderColor: p.is_wslr ? '#10b981' : palette[(i + 1) % palette.length],
+        backgroundColor: 'transparent',
+        tension: 0.25,
+        pointRadius: 3,
+        pointHoverRadius: 6,
+        borderWidth: p.is_wslr ? 3 : 2,
+        spanGaps: false,    // gaps when data missing (per user)
+      }));
 
       if (trajectoryChart) trajectoryChart.destroy();
       trajectoryChart = new Chart(canvas.getContext('2d'), {
@@ -2663,23 +2830,22 @@
           maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           plugins: {
-            legend: {
-              position: 'bottom',
-              labels: { boxWidth: 14, font: { size: 11 } },
-            },
+            legend: { position: 'bottom', labels: { boxWidth: 14, font: { size: 11 } } },
             tooltip: {
               callbacks: {
-                title: items => items.length ? xLabels[items[0].dataIndex] : '',
-                label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) : 'no rate / sold out'),
+                title: items => items.length ? 'Scrape: ' + xLabels[items[0].dataIndex] : '',
+                label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) + ' total' : 'incomplete data'),
               },
             },
           },
           scales: {
-            y: { beginAtZero: false, title: { display: true, text: 'AU$ per night' }, ticks: { callback: v => 'AU$' + v } },
-            x: { title: { display: true, text: 'Check-in date' }, ticks: { autoSkip: true, maxRotation: 60, minRotation: 0 } },
+            y: { beginAtZero: false, title: { display: true, text: `Total cost (AU$ · ${data.nightsInRange}n)` }, ticks: { callback: v => 'AU$' + Math.round(v) } },
+            x: { title: { display: true, text: 'Scrape timestamp' }, ticks: { autoSkip: true, maxRotation: 60, minRotation: 0 } },
           },
         },
       });
+
+      renderTrajectoryMoves(allDates);
     }
 
     // ==================================================================
