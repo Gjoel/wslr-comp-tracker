@@ -197,36 +197,27 @@
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
 
-    <!-- Rate trajectory (range-based, bar chart with median markers + insights) -->
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200">
       <div class="px-6 py-4 border-b border-slate-200">
-        <h2 class="text-lg font-semibold">Rate trajectory</h2>
-        <p class="text-sm text-slate-500 mt-1">How each property's comparable room rate has moved across every scrape, for the selected date range and match group. Each bar shows the range of nightly rates across the dates in your selection &mdash; top of bar = highest night, bottom = lowest, <strong>black tick = median</strong>. Hover any bar for a per-scrape breakdown. Notable per-night changes are summarised below.</p>
+        <h2 class="text-lg font-semibold">Date snapshot</h2>
+        <p class="text-sm text-slate-500 mt-1">Cheapest mapped room per property per date for the selected match group. Amber annotations = substitution (cheaper mapped room sold out, more expensive one is now the cheapest mapped option).</p>
       </div>
-      <div class="p-6">
-        <div style="position: relative; height: 320px;">
-          <canvas id="trajectoryChart"></canvas>
-        </div>
-        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date range and match group yet. Widen the range or wait for more scrapes.</div>
-        <div id="trajectoryInsights" class="mt-6"></div>
+      <div class="overflow-x-auto p-6">
+        <table class="w-full text-sm" id="snapshotTable"></table>
+        <p id="snapshotNote" class="text-xs text-slate-400 mt-3 hidden"></p>
       </div>
     </div>
 
-    <!-- Trends & changes -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
-        <h2 class="text-lg font-semibold">Trends &amp; changes</h2>
-        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape for this match group, across the selected date range.</p>
+        <h2 class="text-lg font-semibold">Rate comparison by date</h2>
+        <p id="chartNote" class="text-sm text-slate-500 mt-1 hidden"></p>
       </div>
       <div class="p-6">
-        <h3 class="font-semibold text-sm mb-3 text-slate-700">By property</h3>
-        <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
-        <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers (excluding substitutions)</h3>
-        <div id="topMoversContainer" class="border border-slate-200 rounded p-3 bg-slate-50"></div>
+        <canvas id="rateChart" height="120"></canvas>
       </div>
     </div>
 
-    <!-- Market view (heatmap + opportunities/overpricing) -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Market view</h2>
@@ -256,10 +247,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Inventory &amp; availability</h2>
-        <p class="text-sm text-slate-500 mt-1">Property-level inventory snapshot for the selected date range. <strong>Independent of the match group selector</strong> &mdash; this section is about which specific rooms have stock, not apples-to-apples comparisons.</p>
-        <div class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2 mt-2 inline-block">
-          <strong>⚠ Booking.com only:</strong> Room counts reflect what's bookable on Booking.com (sourced from the "Select amount" dropdown). Booking caps that dropdown at 10, so cells showing <strong>10</strong> mean <strong>10 or more available</strong>. A property's true inventory across other channels (direct, other OTAs, walk-ins) may be higher.
-        </div>
+        <p class="text-sm text-slate-500 mt-1">Property-level inventory snapshot. <strong>Independent of the match group selector</strong> &mdash; this section is about which specific rooms have stock, not apples-to-apples comparisons.</p>
       </div>
       <div class="p-6">
 
@@ -286,7 +274,7 @@
         <!-- Piece B: Competitor inventory matrix (per-room-type remaining-count detail) -->
         <div class="mb-10">
           <h3 class="font-semibold text-sm mb-1 text-slate-700">Competitor inventory by room type</h3>
-          <p class="text-xs text-slate-500 mb-3">Per-room-type bookability over the date range. Numbers in cells = rooms available on Booking.com from the "Select amount" dropdown (capped at 10 &mdash; a <strong>10</strong> means <em>10 or more</em>). <strong>✓</strong> = bookable, count couldn't be read. <strong>—</strong> = sold out or no data. Sorted "most sold out first" within each property.</p>
+          <p class="text-xs text-slate-500 mb-3">Per-room-type bookability over the date range. Numbers in cells = "Only X left at this price" badges captured from Booking (low-stock signal). <strong>✓</strong> = bookable, count unknown. <strong>—</strong> = sold out or no data. WSLR's calendar is up above; this section is for competitors.</p>
           <div id="competitorInvMatrix" class="space-y-4"></div>
         </div>
 
@@ -300,25 +288,39 @@
       </div>
     </div>
 
-    <!-- Reference views (collapsible) -->
-    <details class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
-      <summary class="px-6 py-4 cursor-pointer font-semibold text-slate-700 select-none hover:bg-slate-50 flex items-center justify-between">
-        <span>Reference views <span class="text-xs font-normal text-slate-500 ml-2">date snapshot · rate-by-date chart</span></span>
-        <span class="text-xs text-slate-400">click to expand</span>
-      </summary>
-      <div class="border-t border-slate-200 p-6">
-        <h3 class="font-semibold text-sm mb-1 text-slate-700">Date snapshot</h3>
-        <p class="text-sm text-slate-500 mb-3">Cheapest mapped room per property per date for the selected match group. Amber annotations = substitution (cheaper mapped room sold out, more expensive one is now the cheapest mapped option).</p>
-        <div class="overflow-x-auto mb-8">
-          <table class="w-full text-sm" id="snapshotTable"></table>
-          <p id="snapshotNote" class="text-xs text-slate-400 mt-3 hidden"></p>
-        </div>
-
-        <h3 class="font-semibold text-sm mb-1 text-slate-700 mt-8">Rate comparison by date</h3>
-        <p id="chartNote" class="text-sm text-slate-500 mb-3 hidden"></p>
-        <canvas id="rateChart" height="120"></canvas>
+    <!-- Phase 7: Rate trajectory for a single check-in date -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Rate trajectory</h2>
+        <p class="text-sm text-slate-500 mt-1">Pick a check-in date and a WSLR room type to see how each property's comparable room rate has moved across every scrape we've taken. Reveals when competitors dropped or hiked prices.</p>
       </div>
-    </details>
+      <div class="p-6">
+        <div class="mb-3">
+          <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type:</div>
+          <div id="trajectoryGroupPills" class="flex flex-wrap gap-2"></div>
+        </div>
+        <div class="flex items-center gap-3 flex-wrap mb-4">
+          <label class="text-xs uppercase tracking-wide text-slate-500">Check-in date:</label>
+          <select id="trajectoryDate" class="text-sm border border-slate-300 rounded px-3 py-1.5"></select>
+          <div class="text-xs text-slate-500" id="trajectoryMeta"></div>
+        </div>
+        <canvas id="trajectoryChart" height="120"></canvas>
+        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date and room type yet. Pick another date or room type, or wait for more scrapes.</div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
+      <div class="px-6 py-4 border-b border-slate-200">
+        <h2 class="text-lg font-semibold">Trends &amp; changes</h2>
+        <p class="text-sm text-slate-500 mt-1">What's moved since the previous scrape for this match group.</p>
+      </div>
+      <div class="p-6">
+        <h3 class="font-semibold text-sm mb-3 text-slate-700">By property</h3>
+        <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
+        <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers (excluding substitutions)</h3>
+        <div id="topMoversContainer" class="border border-slate-200 rounded p-3 bg-slate-50"></div>
+      </div>
+    </div>
 
     <footer class="text-center text-xs text-slate-400 mt-8 pb-8">
       Data scraped daily from booking.com · WSLR internal tool
@@ -894,6 +896,8 @@
       }
       document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
       document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
+      const trajSel = document.getElementById('trajectoryDate');
+      if (trajSel) trajSel.addEventListener('change', renderTrajectory);
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           if (!document.getElementById('adminModal').classList.contains('hidden')) closeAdmin();
@@ -1214,16 +1218,18 @@
       renderHeader(currentRows);
       renderCoverageNote(allDates);
       renderStats(allDates);
-      renderTrajectory();
-      renderTrends(allDates);
-      renderTopMovers(allDates);
+      renderTable(allDates);
+      renderChart(allDates);
       renderLongRangeStats(allDates);
       renderMonthChips(allDates);
       renderHeatmap(allDates);
       renderInsights(allDates);
       renderInventory();
-      renderTable(allDates);
-      renderChart(allDates);
+      renderTrends(allDates);
+      renderTopMovers(allDates);
+      renderTrajectoryPills();
+      populateTrajectoryDates(allDates);
+      renderTrajectory();
     }
 
     function renderCoverageNote(allDates) {
@@ -1940,16 +1946,9 @@
             const left = slot.roomsLeft;
             const rateLabel = `AU$${Math.round(slot.rate)}/n`;
             if (left != null) {
-              // Color thresholds — 10 is Booking's dropdown cap (= "10 or more"), so neutral cyan, not red
-              const color = left === 1 ? '#dc2626'
-                          : left === 2 ? '#ea580c'
-                          : left <= 4 ? '#d97706'
-                          : left <= 9 ? '#059669'
-                          : '#0891b2';
-              const tooltipText = left >= 10
-                ? roomName + ' · ' + fmtDate(d) + ': 10+ available on Booking · ' + rateLabel
-                : roomName + ' · ' + fmtDate(d) + ': ' + left + ' left on Booking · ' + rateLabel;
-              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(tooltipText)}">${left}</div>`;
+              // Low-stock badge — color by remaining count
+              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : '#059669';
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': only ' + left + ' left at this price · ' + rateLabel)}">${left}</div>`;
             }
             // Bookable, count unknown
             return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel)}">✓</div>`;
@@ -2235,143 +2234,95 @@
     // ==================================================================
     //  PHASE 7 — RATE TRAJECTORY (per-date time-series across scrapes)
     // ==================================================================
-    // ==================================================================
-    //  RATE TRAJECTORY (range-based bar chart with per-night insights)
-    // ==================================================================
-
-    // Aggregates rates by (property, scrape_run_id) across all nights in the
-    // current date range for the current match group. Returns min/max/median
-    // per scrape per property plus the underlying per-night rates so insights
-    // can compare consecutive scrapes night-by-night.
-    function buildTrajectoryRange() {
-      const mappedProps = activeMappedProperties();
-      if (mappedProps.length === 0) return null;
-
-      // (property, scrape_run_id) -> { scraped_at, byNight: { check_in: cheapest_rate } }
-      const byPropRun = {};
-      for (const r of allRows) {
-        if (!mappedProps.some(p => p.name === r.property)) continue;
-        const patterns = patternsFor(r.property);
-        if (!patterns) continue;
-        const rn = (r.room_name || '').toLowerCase();
-        if (!patterns.some(p => rn.includes(p.toLowerCase()))) continue;
-        if (r.rate == null) continue;
-
-        if (!byPropRun[r.property]) byPropRun[r.property] = {};
-        if (!byPropRun[r.property][r.scrape_run_id]) {
-          byPropRun[r.property][r.scrape_run_id] = { scraped_at: r.scraped_at, byNight: {} };
-        }
-        const slot = byPropRun[r.property][r.scrape_run_id];
-        const existing = slot.byNight[r.check_in];
-        if (existing == null || r.rate < existing) {
-          slot.byNight[r.check_in] = r.rate;
-        }
-        // Track latest scraped_at across rows in the same run (they should all match)
-        if (r.scraped_at > slot.scraped_at) slot.scraped_at = r.scraped_at;
+    function populateTrajectoryDates(allDates) {
+      const sel = document.getElementById('trajectoryDate');
+      if (!sel) return;
+      const prevValue = sel.value;
+      if (!allDates || allDates.length === 0) {
+        sel.innerHTML = '<option value="">No dates in range</option>';
+        return;
       }
-
-      // All unique scrape runs across all properties, chronologically
-      const runInfo = {};
-      for (const prop in byPropRun) {
-        for (const runId in byPropRun[prop]) {
-          const sa = byPropRun[prop][runId].scraped_at;
-          if (!runInfo[runId] || sa > runInfo[runId]) runInfo[runId] = sa;
-        }
+      sel.innerHTML = allDates.map(d => `<option value="${d.check_in}">${fmtDate(d.check_in)}${d.nights && d.nights !== '1' ? ' (' + d.nights + 'n)' : ''}</option>`).join('');
+      if (prevValue && allDates.some(d => d.check_in === prevValue)) {
+        sel.value = prevValue;
       }
-      const scrapeRunIds = Object.keys(runInfo).sort((a, b) => runInfo[a].localeCompare(runInfo[b]));
-      if (scrapeRunIds.length === 0) return null;
-
-      // For each property build a parallel series (one entry per scrape, null when missing)
-      const propData = {};
-      for (const p of mappedProps) {
-        propData[p.name] = scrapeRunIds.map(runId => {
-          const slot = byPropRun[p.name]?.[runId];
-          if (!slot) return { runId, scrapedAt: runInfo[runId], min: null, max: null, median: null, nights: {}, count: 0 };
-          const rates = Object.values(slot.byNight);
-          if (rates.length === 0) return { runId, scrapedAt: slot.scraped_at, min: null, max: null, median: null, nights: {}, count: 0 };
-          return {
-            runId,
-            scrapedAt: slot.scraped_at,
-            min: Math.min(...rates),
-            max: Math.max(...rates),
-            median: median(rates),
-            nights: slot.byNight,
-            count: rates.length,
-          };
-        });
-      }
-
-      return { scrapeRunIds, scrapeTimes: scrapeRunIds.map(id => runInfo[id]), propData };
     }
 
-    // Compares consecutive scrapes night-by-night for each property in the trajectory
-    // data and returns notable changes (rate moves > SIGNIFICANT_DELTA, sold-outs, reopens).
-    function buildTrajectoryInsights(traj) {
-      if (!traj) return [];
-      const insights = [];
-      for (const prop in traj.propData) {
-        const series = traj.propData[prop];
-        for (let i = 1; i < series.length; i++) {
-          const prev = series[i - 1];
-          const curr = series[i];
-          const nights = new Set([...Object.keys(prev.nights), ...Object.keys(curr.nights)]);
-          for (const night of nights) {
-            const pr = prev.nights[night];
-            const cr = curr.nights[night];
-            if (pr != null && cr != null) {
-              const delta = (cr - pr) / pr;
-              if (Math.abs(delta) >= SIGNIFICANT_DELTA) {
-                insights.push({ property: prop, fromScrape: prev.scrapedAt, toScrape: curr.scrapedAt, night, prevRate: pr, currRate: cr, delta, type: 'rateChange' });
-              }
-            } else if (pr != null && cr == null) {
-              insights.push({ property: prop, fromScrape: prev.scrapedAt, toScrape: curr.scrapedAt, night, prevRate: pr, currRate: null, delta: null, type: 'soldOut' });
-            } else if (pr == null && cr != null) {
-              insights.push({ property: prop, fromScrape: prev.scrapedAt, toScrape: curr.scrapedAt, night, prevRate: null, currRate: cr, delta: null, type: 'reopened' });
-            }
-          }
+    function buildTrajectory(checkInDate) {
+      // For one check_in date + the current match group, group rows by
+      // (property, scrape_run_id), take cheapest matching room per group,
+      // sort chronologically.
+      const rows = allRows.filter(r => r.check_in === checkInDate);
+      if (rows.length === 0) return null;
+      // Only keep rooms that match patterns for that property in the current group
+      const matched = rows.filter(r => {
+        const patterns = patternsFor(r.property);
+        if (!patterns) return false;
+        const rn = (r.room_name || '').toLowerCase();
+        return patterns.some(p => rn.includes(p.toLowerCase()));
+      });
+      if (matched.length === 0) return null;
+
+      // property -> scrape_run_id -> { scraped_at, cheapestRate }
+      const byProp = {};
+      for (const r of matched) {
+        if (!byProp[r.property]) byProp[r.property] = {};
+        if (!byProp[r.property][r.scrape_run_id]) {
+          byProp[r.property][r.scrape_run_id] = { scraped_at: r.scraped_at, rate: r.rate };
+        } else {
+          const slot = byProp[r.property][r.scrape_run_id];
+          if (r.rate != null && (slot.rate == null || r.rate < slot.rate)) slot.rate = r.rate;
         }
       }
-      // Sort: most recent scrape transition first, then by magnitude within
-      insights.sort((a, b) => {
-        if (a.toScrape !== b.toScrape) return b.toScrape.localeCompare(a.toScrape);
-        const am = a.delta != null ? Math.abs(a.delta) : 1;  // treat sold-out/reopen as "big"
-        const bm = b.delta != null ? Math.abs(b.delta) : 1;
-        return bm - am;
-      });
-      return insights;
+      const series = {};
+      const allScrapeTimes = new Set();
+      for (const property of Object.keys(byProp)) {
+        const points = Object.values(byProp[property])
+          .map(p => ({ scraped_at: p.scraped_at, rate: p.rate }))
+          .sort((a, b) => a.scraped_at.localeCompare(b.scraped_at));
+        series[property] = points;
+        points.forEach(p => allScrapeTimes.add(p.scraped_at));
+      }
+      return { series, scrapeTimes: [...allScrapeTimes].sort() };
+    }
+
+    function renderTrajectoryPills() {
+      const container = document.getElementById('trajectoryGroupPills');
+      if (!container) return;
+      container.innerHTML = ROOM_MAPPINGS.map((m, i) =>
+        `<button class="group-pill ${i === currentGroupIdx ? 'active' : ''}" onclick="setMatchGroup(${i})">${escAttr(m.group)}</button>`
+      ).join('');
     }
 
     function renderTrajectory() {
-      const canvas = document.getElementById('trajectoryChart');
+      const sel = document.getElementById('trajectoryDate');
+      const meta = document.getElementById('trajectoryMeta');
       const empty = document.getElementById('trajectoryEmpty');
-      const insightsEl = document.getElementById('trajectoryInsights');
-      if (!canvas) return;
-
-      const traj = buildTrajectoryRange();
-      if (!traj || traj.scrapeRunIds.length === 0) {
+      const canvas = document.getElementById('trajectoryChart');
+      if (!sel || !canvas) return;
+      const checkInDate = sel.value;
+      if (!checkInDate) {
         empty.classList.remove('hidden');
         canvas.style.display = 'none';
-        if (insightsEl) insightsEl.innerHTML = '';
+        meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
         return;
       }
-
-      // Keep only properties with at least one populated scrape
-      const propsWithData = Object.keys(traj.propData).filter(p => traj.propData[p].some(s => s.min != null));
-      if (propsWithData.length === 0) {
+      const data = buildTrajectory(checkInDate);
+      if (!data || Object.keys(data.series).length === 0) {
         empty.classList.remove('hidden');
         canvas.style.display = 'none';
-        if (insightsEl) insightsEl.innerHTML = '';
+        meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
         return;
       }
-
       empty.classList.add('hidden');
       canvas.style.display = '';
+      meta.textContent = `${data.scrapeTimes.length} scrapes captured for ${fmtDate(checkInDate)}`;
 
-      const labels = traj.scrapeTimes.map(t => {
+      const labels = data.scrapeTimes.map(t => {
         const dt = new Date(t);
-        return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' });
+        return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ' ' + dt.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false });
       });
       const palette = {
         'WSLR (us)': '#10b981',
@@ -2382,128 +2333,43 @@
         'Corrimal Beach Tourist Park': '#a855f7',
       };
       const wslr = wslrName();
-      const propsSorted = propsWithData.sort((a, b) => {
+      const propsSorted = Object.keys(data.series).sort((a, b) => {
         if (a === wslr) return -1;
         if (b === wslr) return 1;
         return a.localeCompare(b);
       });
-
       const datasets = propsSorted.map(p => {
-        const series = traj.propData[p];
-        const color = palette[p] || '#94a3b8';
+        const series = data.series[p];
+        const pointMap = {};
+        series.forEach(pt => { pointMap[pt.scraped_at] = pt.rate; });
         return {
           label: p,
-          // Floating bar: [low, high] per scrape (null where no data)
-          data: series.map(s => s.min != null ? [s.min, s.max] : null),
-          backgroundColor: color + '55',
-          borderColor: color,
-          borderWidth: 1.5,
-          borderSkipped: false,
-          // Used by tooltip + custom median-tick plugin
-          _medians: series.map(s => s.median),
-          _nights: series.map(s => s.nights),
-          _counts: series.map(s => s.count),
+          data: data.scrapeTimes.map(t => pointMap[t] != null ? pointMap[t] : null),
+          borderColor: palette[p] || '#94a3b8',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 3,
+          borderWidth: p === wslr ? 3 : 2,
+          spanGaps: true,
         };
       });
-
       if (trajectoryChart) trajectoryChart.destroy();
       trajectoryChart = new Chart(canvas.getContext('2d'), {
-        type: 'bar',
+        type: 'line',
         data: { labels, datasets },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: 'nearest', intersect: true },
+          interaction: { mode: 'index', intersect: false },
           plugins: {
             legend: { position: 'bottom' },
-            tooltip: {
-              callbacks: {
-                label: (c) => {
-                  const ds = c.dataset;
-                  const idx = c.dataIndex;
-                  const range = ds.data[idx];
-                  const med = ds._medians[idx];
-                  const count = ds._counts[idx];
-                  if (range == null) return ds.label + ': no data';
-                  if (range[0] === range[1]) return `${ds.label}: AU$${Math.round(med)} (${count} night${count === 1 ? '' : 's'})`;
-                  return `${ds.label}: AU$${Math.round(range[0])}–${Math.round(range[1])} · median AU$${Math.round(med)} (${count} nights)`;
-                },
-              },
-            },
+            tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) : 'sold out / no data') } },
           },
           scales: {
             y: { beginAtZero: false, title: { display: true, text: 'AU$ per night' }, ticks: { callback: v => 'AU$' + v } },
-            x: { title: { display: true, text: 'Scrape date' } },
+            x: { title: { display: true, text: 'Scrape timestamp' } },
           },
         },
-        plugins: [{
-          id: 'medianMarker',
-          afterDatasetsDraw(chart) {
-            const ctx = chart.ctx;
-            chart.data.datasets.forEach((ds, dsIdx) => {
-              if (!ds._medians) return;
-              const meta = chart.getDatasetMeta(dsIdx);
-              meta.data.forEach((bar, idx) => {
-                const med = ds._medians[idx];
-                if (med == null || !bar) return;
-                const y = chart.scales.y.getPixelForValue(med);
-                const x = bar.x;
-                const halfW = (bar.width || 16) / 2;
-                ctx.save();
-                ctx.strokeStyle = '#0f172a';
-                ctx.lineWidth = 2;
-                ctx.beginPath();
-                ctx.moveTo(x - halfW, y);
-                ctx.lineTo(x + halfW, y);
-                ctx.stroke();
-                ctx.restore();
-              });
-            });
-          },
-        }],
       });
-
-      // Insights — group by scrape transition, most recent first
-      const insights = buildTrajectoryInsights(traj);
-      if (!insightsEl) return;
-      if (insights.length === 0) {
-        insightsEl.innerHTML = '<h3 class="font-semibold text-sm mb-2 text-slate-700">Notable changes between scrapes</h3><p class="text-sm text-slate-500">No notable per-night rate changes, sold-outs, or reopens between scrapes in this range.</p>';
-        return;
-      }
-      // Group; cap total items shown to keep things skimmable
-      const MAX_INSIGHTS = 20;
-      const byTransition = {};
-      let kept = 0;
-      for (const ins of insights) {
-        if (kept >= MAX_INSIGHTS) break;
-        const key = ins.toScrape;
-        if (!byTransition[key]) byTransition[key] = { fromScrape: ins.fromScrape, toScrape: ins.toScrape, items: [] };
-        byTransition[key].items.push(ins);
-        kept++;
-      }
-      const blocks = Object.values(byTransition).sort((a, b) => b.toScrape.localeCompare(a.toScrape));
-      const totalRemaining = insights.length - kept;
-      insightsEl.innerHTML = '<h3 class="font-semibold text-sm mb-2 text-slate-700">Notable changes between scrapes</h3>' +
-        blocks.map(b => {
-          const fromD = new Date(b.fromScrape);
-          const toD = new Date(b.toScrape);
-          const header = `Between ${fromD.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })} and ${toD.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })} scrapes`;
-          const lines = b.items.map(ins => {
-            const wslrTag = ins.property === wslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : '';
-            if (ins.type === 'soldOut') {
-              return `<li class="text-sm py-1"><span class="font-medium">${escAttr(ins.property)}</span>${wslrTag} went <span class="text-rose-700 font-medium">sold out</span> on ${fmtDate(ins.night)} <span class="text-slate-500">(was AU$${Math.round(ins.prevRate)})</span></li>`;
-            }
-            if (ins.type === 'reopened') {
-              return `<li class="text-sm py-1"><span class="font-medium">${escAttr(ins.property)}</span>${wslrTag} <span class="text-emerald-700 font-medium">reopened</span> ${fmtDate(ins.night)} at AU$${Math.round(ins.currRate)}</li>`;
-            }
-            const sign = ins.delta > 0 ? '+' : '';
-            const color = ins.delta > 0 ? 'text-rose-700' : 'text-emerald-700';
-            const direction = ins.delta > 0 ? 'raised' : 'dropped';
-            return `<li class="text-sm py-1"><span class="font-medium">${escAttr(ins.property)}</span>${wslrTag} <span class="${color} font-medium">${direction}</span> ${fmtDate(ins.night)}: AU$${Math.round(ins.prevRate)} → AU$${Math.round(ins.currRate)} <span class="${color} font-medium">(${sign}${(ins.delta * 100).toFixed(0)}%)</span></li>`;
-          }).join('');
-          return `<div class="mb-3"><div class="text-xs uppercase tracking-wide text-slate-500 font-semibold mb-1">${header}</div><ul class="border border-slate-200 rounded bg-slate-50 px-3 py-1">${lines}</ul></div>`;
-        }).join('') +
-        (totalRemaining > 0 ? `<p class="text-xs text-slate-400 italic">+ ${totalRemaining} more change${totalRemaining === 1 ? '' : 's'} not shown</p>` : '');
     }
 
     // ==================================================================
