@@ -67,6 +67,10 @@
     .day-label.weekend { color: #0f172a; font-weight: 600; background: #f1f5f9; }
     .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
     .modal-sticky-header { position: sticky; top: 0; background: white; z-index: 10; border-bottom: 1px solid #e2e8f0; }
+    /* Sticky filter bar — pinned by default, can be toggled off */
+    #stickyBar.sticky-pinned { position: sticky; top: 0; z-index: 30; background: linear-gradient(to bottom, #f8fafc 0%, #f8fafc 92%, rgba(248,250,252,0.92) 100%); }
+    #stickyBar.sticky-pinned::after { content: ''; position: absolute; left: 0; right: 0; bottom: -8px; height: 8px; pointer-events: none; background: linear-gradient(to bottom, rgba(15,23,42,0.06), transparent); }
+    #stickyBar.sticky-unpinned { position: static; }
     .group-pill {
       padding: 4px 10px; font-size: 12px; border-radius: 999px;
       border: 1px solid #cbd5e1; background: white; color: #475569; cursor: pointer;
@@ -177,29 +181,36 @@
       </div>
     </header>
 
-    <!-- Match Group selector -->
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6">
-      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type</div>
-      <div id="groupPills" class="flex flex-wrap gap-2 mb-2"></div>
-      <div class="text-xs text-slate-500" id="groupSummary"></div>
-    </div>
+    <!-- Sticky-pinnable filters: match group + date range -->
+    <div id="stickyBar" class="sticky-pinned" style="margin: 0 -1.5rem; padding: 0 1.5rem;">
+      <div class="flex justify-end -mb-1 pt-2">
+        <button id="stickyToggle" onclick="toggleSticky()" class="text-xs px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 text-slate-600">📌 Unpin filters</button>
+      </div>
 
-    <!-- Date range -->
-    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
-      <div class="flex items-center gap-2">
-        <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
-        <input type="date" id="rangeStart" class="text-sm border border-slate-300 rounded px-2 py-1">
-        <span class="text-slate-400 text-sm">to</span>
-        <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
+      <!-- Match Group selector -->
+      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-3 mt-2">
+        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type</div>
+        <div id="groupPills" class="flex flex-wrap gap-2 mb-2"></div>
+        <div class="text-xs text-slate-500" id="groupSummary"></div>
       </div>
-      <div class="flex flex-wrap gap-1">
-        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
-        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
-        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
-        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
-        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
+
+      <!-- Date range -->
+      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-2">
+          <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
+          <input type="date" id="rangeStart" class="text-sm border border-slate-300 rounded px-2 py-1">
+          <span class="text-slate-400 text-sm">to</span>
+          <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
+        </div>
+        <div class="flex flex-wrap gap-1">
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
+        </div>
+        <div class="ml-auto text-xs text-slate-500" id="coverageNote"></div>
       </div>
-      <div class="ml-auto text-xs text-slate-500" id="coverageNote"></div>
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
@@ -228,7 +239,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Market view</h2>
-        <p class="text-sm text-slate-500 mt-1">Pricing patterns across mapped properties for the selected range and match group. Amber dot = substitution.</p>
+        <p class="text-sm text-slate-500 mt-1">Pricing patterns across mapped properties for the selected range and match group.</p>
       </div>
       <div class="p-6">
         <div id="longRangeStats"></div>
@@ -891,6 +902,20 @@
     }
 
     // ---------- Date range ----------
+    function toggleSticky() {
+      const bar = document.getElementById('stickyBar');
+      const btn = document.getElementById('stickyToggle');
+      if (bar.classList.contains('sticky-pinned')) {
+        bar.classList.remove('sticky-pinned');
+        bar.classList.add('sticky-unpinned');
+        btn.textContent = '📌 Pin filters to top';
+      } else {
+        bar.classList.add('sticky-pinned');
+        bar.classList.remove('sticky-unpinned');
+        btn.textContent = '📌 Unpin filters';
+      }
+    }
+
     function setRangePreset(preset) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -1733,11 +1758,8 @@
           if (!r) return `<div class="heat-cell empty" title="${escAttr(p.name + ' ' + d.check_in + ': no data')}"></div>`;
           if (r.rate == null) return `<div class="heat-cell sold-out" title="${escAttr(p.name + ' ' + d.check_in + ': sold out (' + (r.room_name || '') + ')')}"></div>`;
           const color = getColor(r.rate, d.check_in);
-          const sub = isSubstitution(r);
-          let title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
-          if (sub) title += ' ⚠ SUBSTITUTION — was AU$' + Math.round(r.prev.rate) + ' (' + r.prev.room_name + ')';
-          const cellCls = 'heat-cell' + (sub ? ' substitution' : '');
-          return `<div class="${cellCls}" style="background: ${color}" title="${escAttr(title)}"></div>`;
+          const title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
+          return `<div class="heat-cell" style="background: ${color}" title="${escAttr(title)}"></div>`;
         }).join('');
         return `<div class="heat-row">
           <div class="row-label ${p.is_wslr ? 'wslr' : ''}">
@@ -1761,14 +1783,12 @@
            <span class="legend-swatch ml-3" style="background:hsl(65,65%,55%)"></span>mid
            <span class="legend-swatch ml-3" style="background:hsl(0,65%,55%)"></span>expensive
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data
-           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`
+           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data`
         : `<span class="legend-swatch" style="background:hsl(130,60%,50%)"></span>cheaper than market
            <span class="legend-swatch ml-3" style="background:hsl(0,0%,60%)"></span>at market
            <span class="legend-swatch ml-3" style="background:hsl(0,60%,50%)"></span>above market
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data
-           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`;
+           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data`;
       document.getElementById('heatmapLegend').innerHTML = legendHtml;
     }
 
