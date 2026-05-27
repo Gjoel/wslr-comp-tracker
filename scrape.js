@@ -132,6 +132,13 @@ function pricesFromText(text) {
     // strikethrough originals, or "save AUD …" deltas.
     if (/\b(?:genius|loyalty|member[\s-]?only|app[\s-]?only|mobile[\s-]?only|signed\s*in|sign\s*in|book\s+direct|earn\s+\d|reward(?:\s+nights?)?)\b/.test(windowText)) continue;
     if (/\b(?:was|before|originally|original\s+price|rrp|crossed[\s-]?out|reduced\s+from|save\s+(?:au\$|aud|a\$|\$))\b/.test(windowText)) continue;
+    // Skip per-night equivalents. Booking.com displays both total and per-night
+    // for multi-night stays; we always derive per-night ourselves from total / nights.
+    // Use a TIGHT window after the price (Booking puts the "per night" suffix
+    // 0–25 chars after the amount) so we don't accidentally kill the total
+    // price when it sits earlier in the same row text.
+    const tightAfter = text.substring(m.index + m[0].length, Math.min(text.length, m.index + m[0].length + 25)).toLowerCase();
+    if (/^\s*(?:per\s*night|\/\s*night|each\s*night|nightly|avg\.?\s*\/?\s*night|average\s+per\s+night)/.test(tightAfter)) continue;
     out.push(value);
   }
   return out;
