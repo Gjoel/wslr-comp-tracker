@@ -1,0 +1,44 @@
+name: Debug scrape (inspect one URL)
+
+# Manual-only. Run from the Actions tab → "Debug scrape (inspect one URL)" →
+# "Run workflow" → paste a full Booking.com URL (a "Verify on Booking.com" link
+# from the dashboard works perfectly). Then read the log and download the
+# "debug-output" artifact (screenshot + HTML).
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Full Booking.com URL to inspect"
+        required: true
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install Playwright
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Run diagnostic
+        env:
+          DEBUG_URL: ${{ github.event.inputs.url }}
+        run: node debug-scrape.js
+
+      - name: Upload screenshot + HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-output
+          path: |
+            debug-*.png
+            debug-*.html
+          if-no-files-found: warn
