@@ -116,30 +116,40 @@ function buildUrl(slug, checkIn, checkOut) {
   return `https://www.booking.com/hotel/au/${slug}.en-gb.html?${params.toString()}`;
 }
 
+// PRIMARY price extractor. Booking.com labels every room's headline nightly
+// rate as "AUD 182 per night" (with AUD / AU$ / A$ / $ and per night / nightly
+// variants). That figure is exactly the per-night rate we want, so we grab it
+// directly — no dividing, no window-scanning.
+//
+// This replaces an older approach that tried to find a stay TOTAL and divide by
+// nights. That approach broke badly: the phrase "Free cancellation before <date>"
+// (present on almost every row) tripped a "before/was" strike-through filter and
+// discarded the real price, leaving only the "select N rooms" multi-room totals.
+// Math.min then picked the 2-rooms total, doubling the stored rate
+// (e.g. storing AU$363 = 2×$182, or AU$315 ≈ 2×$157 for Corrimal).
+function perNightFromText(text) {
+  const re = /(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)\s*(?:per\s*night|\/\s*night|each\s*night|nightly|a\s*night)/gi;
+  const vals = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const v = parseFloat(m[1].replace(/,/g, ''));
+    if (v >= 50 && v < 10000) vals.push(v);
+  }
+  return vals.length ? Math.min(...vals) : null;
+}
+
+// FALLBACK extractor: every in-range price in the text, no filtering.
+// Used only when no explicit "per night" figure is present. The genuine
+// single-night rate is the smallest real number in a room row — struck-through
+// originals are higher, multi-room "select N rooms" totals are higher, and
+// taxes/fees fall below the 50 floor — so callers take the minimum.
 function pricesFromText(text) {
-  // Match a price AND look at the surrounding 80 chars on each side
-  // to skip ones that are Genius/loyalty/strikethrough/before-price labels.
   const re = /(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)/gi;
   const out = [];
   let m;
   while ((m = re.exec(text)) !== null) {
     const value = parseFloat(m[1].replace(/,/g, ''));
-    if (!(value >= 50 && value < 10000)) continue;
-    const windowStart = Math.max(0, m.index - 80);
-    const windowEnd = Math.min(text.length, m.index + m[0].length + 80);
-    const windowText = text.substring(windowStart, windowEnd).toLowerCase();
-    // Skip prices that look like Genius/loyalty/member preview rates,
-    // strikethrough originals, or "save AUD …" deltas.
-    if (/\b(?:genius|loyalty|member[\s-]?only|app[\s-]?only|mobile[\s-]?only|signed\s*in|sign\s*in|book\s+direct|earn\s+\d|reward(?:\s+nights?)?)\b/.test(windowText)) continue;
-    if (/\b(?:was|before|originally|original\s+price|rrp|crossed[\s-]?out|reduced\s+from|save\s+(?:au\$|aud|a\$|\$))\b/.test(windowText)) continue;
-    // Skip per-night equivalents. Booking.com displays both total and per-night
-    // for multi-night stays; we always derive per-night ourselves from total / nights.
-    // Use a TIGHT window after the price (Booking puts the "per night" suffix
-    // 0–25 chars after the amount) so we don't accidentally kill the total
-    // price when it sits earlier in the same row text.
-    const tightAfter = text.substring(m.index + m[0].length, Math.min(text.length, m.index + m[0].length + 25)).toLowerCase();
-    if (/^\s*(?:per\s*night|\/\s*night|each\s*night|nightly|avg\.?\s*\/?\s*night|average\s+per\s+night)/.test(tightAfter)) continue;
-    out.push(value);
+    if (value >= 50 && value < 10000) out.push(value);
   }
   return out;
 }
@@ -208,16 +218,22 @@ async function getRoomRates(page, nights) {
     if (!text || text.length < 15) continue;
     if (/^(room type|sleeps|today.?s price|select|your choices)/i.test(text)) continue;
 
-    const prices = pricesFromText(text);
-    if (prices.length === 0) continue;
-    const stayTotal = Math.min(...prices);
+    // Prefer Booking's explicit "per night" figure — it's already per-night,
+    // so no division. Only if no per-night label exists do we fall back to the
+    // cheapest in-range price (and divide for multi-night, since that figure is
+    // then likely a stay total).
+    let perNight = perNightFromText(text);
+    if (perNight == null) {
+      const prices = pricesFromText(text);
+      if (prices.length === 0) continue;
+      perNight = nights > 1 ? Math.min(...prices) / nights : Math.min(...prices);
+    }
 
     const lines = text.split('\n').map(l => l.trim()).filter(looksLikeRoomName);
     const roomName = lines[0];
     if (!roomName) continue;
 
     const roomsLeft = extractRoomsLeft(text);
-    const perNight = stayTotal / nights;
     if (!byName[roomName] || perNight < byName[roomName].rate) {
       byName[roomName] = { roomName, rate: perNight, roomsLeft };
     } else if (roomsLeft != null && byName[roomName].roomsLeft == null) {
@@ -298,13 +314,16 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
     }
 
     if (rooms.length === 0) {
-      const prices = pricesFromText(bodyText).filter(n => n >= 150);
-      if (prices.length === 0) {
-        console.log(`${tag} ⚠ NO MATCH      ${property.name}  ${checkIn} (${nights}n)  source=${source}`);
-        try { await page.screenshot({ path: `debug-${property.slug}-${checkIn}.png`, fullPage: true }); } catch {}
-        return [{ ...base, room_name: '(extraction failed)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no rooms parsed; source=${source}` }];
+      let lowest = perNightFromText(bodyText);
+      if (lowest == null) {
+        const prices = pricesFromText(bodyText).filter(n => n >= 150);
+        if (prices.length === 0) {
+          console.log(`${tag} ⚠ NO MATCH      ${property.name}  ${checkIn} (${nights}n)  source=${source}`);
+          try { await page.screenshot({ path: `debug-${property.slug}-${checkIn}.png`, fullPage: true }); } catch {}
+          return [{ ...base, room_name: '(extraction failed)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no rooms parsed; source=${source}` }];
+        }
+        lowest = Math.min(...prices) / nights;
       }
-      const lowest = Math.min(...prices) / nights;
       console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn} (${nights}n)  AU$${lowest.toFixed(0)}/n`);
       return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; fallback to body-text lowest; source=${source}` }];
     }
