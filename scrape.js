@@ -14,6 +14,7 @@ const DELAY_MAX_MS = 3500;
 const START_DATE   = process.env.START_DATE;
 const END_DATE     = process.env.END_DATE;
 const FLUSH_EVERY  = 50;   // flush to Supabase every N rows per worker
+const PROBE_MAX    = parseInt(process.env.PROBE_MAX || '3', 10);  // longest stay we'll probe when a date rejects shorter ones
 
 // ---------- Supabase ----------
 
@@ -84,23 +85,33 @@ function generateDateList() {
     process.exit(1);
   }
 
+  // We no longer pre-decide how many nights to scrape. For every check-in date we
+  // probe 1 night first and let Booking.com tell us the real minimum stay (which
+  // can differ per property). See scrapeOne().
   const dates = [];
   const cursor = new Date(startDate);
   while (cursor <= endDate) {
-    const inDate = new Date(cursor);
-    const dow = inDate.getDay();  // 0=Sun, 5=Fri, 6=Sat
-    // WSLR (and similar) don't allow 1-night stays touching the weekend.
-    // Scrape 2 nights for Fri/Sat/Sun check-ins so we capture real availability.
-    const isWeekendCheckin = (dow === 5 || dow === 6 || dow === 0);
-    const nights = isWeekendCheckin ? 2 : 1;
-    const outDate = new Date(inDate);
-    outDate.setDate(inDate.getDate() + nights);
-    const stayType = isWeekendCheckin ? 'weekend' : 'midweek';
-    dates.push({ checkIn: fmt(inDate), checkOut: fmt(outDate), stayType, nights });
+    dates.push({ checkIn: fmt(new Date(cursor)) });
     cursor.setDate(cursor.getDate() + 1);
   }
   return dates;
 }
+
+// Day-of-week label only — used for the notes field, NOT to decide nights.
+function dowStayType(checkIn) {
+  const dow = new Date(checkIn + 'T00:00:00').getDay(); // 0=Sun, 5=Fri, 6=Sat
+  return (dow === 5 || dow === 6 || dow === 0) ? 'weekend' : 'midweek';
+}
+
+function addDays(ymd, n) {
+  const d = new Date(ymd + 'T00:00:00');
+  d.setDate(d.getDate() + n);
+  return fmt(d);
+}
+
+// Text signals that a date is rejecting a stay because it's shorter than the
+// property's minimum — i.e. a reason to probe a longer stay rather than record sold-out.
+const MIN_STAY_HINT_RE = /minimum (?:stay|length of stay)|night minimum|minimum number of nights|need to stay \d|stay \d+\+? nights?/i;
 
 // ---------- Scrape ----------
 
@@ -245,10 +256,9 @@ async function getRoomRates(page, nights) {
   return { rooms: Object.values(byName), source: 'hprt-table' };
 }
 
-async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerId) {
-  const nights = (new Date(checkOut) - new Date(checkIn)) / 86400000;
-  const url = buildUrl(property.slug, checkIn, checkOut);
+async function scrapeOne(browser, property, checkIn, workerId) {
   const tag = `[W${workerId}]`;
+  const stayType = dowStayType(checkIn);
   const context = await browser.newContext({
     userAgent:
       'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
@@ -258,7 +268,8 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
   });
   const page = await context.newPage();
 
-  const base = {
+  // Build the row template for a given check-out / stay length.
+  const baseFor = (checkOut) => ({
     scrape_run_id: SCRAPE_RUN_ID,
     property: property.name,
     property_slug: property.slug,
@@ -266,81 +277,104 @@ async function scrapeOne(browser, property, checkIn, checkOut, stayType, workerI
     check_out: checkOut,
     currency: 'AUD',
     source: 'booking.com',
-  };
+  });
 
   try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForSelector(
-      '#hprt-table, [data-testid="property-most-relevant-units"], [data-component="availability"], [id*="hprt"]',
-      { timeout: 8000 }
-    ).catch(() => {});
-    await page.waitForTimeout(1500);
+    let len = 1;            // start by asking for a single night
+    let explicitMin = null; // a number Booking states explicitly, if any
 
-    for (const sel of [
-      '[aria-label="Dismiss sign-in info."]',
-      '[aria-label="Dismiss sign in information."]',
-      'button[aria-label*="Dismiss"]',
-    ]) {
-      try { await page.click(sel, { timeout: 500 }); break; } catch {}
-    }
+    while (len <= PROBE_MAX) {
+      const checkOut = addDays(checkIn, len);
+      const base = baseFor(checkOut);
+      const url = buildUrl(property.slug, checkIn, checkOut);
 
-    const bodyText = await page.locator('body').innerText();
-    const isNotFound      = /page not found/i.test(bodyText);
-    const isSoldOut       = /sold out|no rooms available/i.test(bodyText);
-    const showsAlternates = /similar properties available for your dates|alternative dates/i.test(bodyText);
-    const notAvailable    = /not available on our site for your dates/i.test(bodyText);
-    const notBookable     = /(?:isn.t|is not|not currently|not)\s+(?:taking|accepting)\s+(?:reservations|bookings)|currently\s+(?:not bookable|unavailable)|temporarily\s+(?:closed|unavailable)/i.test(bodyText);
-    const minStayMatch    = bodyText.match(/you need to stay (\d+)\+? nights?/i);
-    const minNights       = minStayMatch ? parseInt(minStayMatch[1], 10) : null;
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.waitForSelector(
+        '#hprt-table, [data-testid="property-most-relevant-units"], [data-component="availability"], [id*="hprt"]',
+        { timeout: 8000 }
+      ).catch(() => {});
+      await page.waitForTimeout(1200);
 
-    if (isNotFound) {
-      console.log(`${tag} ✗ 404           ${property.name} ${checkIn} (${nights}n)`);
-      return [];
-    }
-    if (notBookable) {
-      console.log(`${tag} ⊘ NOT BOOKABLE  ${property.name}  ${checkIn} (${nights}n)`);
-      return [{ ...base, room_name: '(property not bookable)', rate: null, available: false, min_nights: null, notes: `stay_type=${stayType}; nights=${nights}; not taking bookings on booking.com` }];
-    }
-    if (isSoldOut || (showsAlternates && notAvailable)) {
-      console.log(`${tag} • SOLD OUT      ${property.name}  ${checkIn} (${nights}n)`);
-      return [{ ...base, room_name: '(sold out)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no availability` }];
-    }
-
-    const { rooms, source } = await getRoomRates(page, nights);
-
-    if (minNights && minNights > nights && rooms.length === 0) {
-      console.log(`${tag} ⊝ MIN ${minNights} NIGHTS  ${property.name}  ${checkIn} (${nights}n)`);
-      return [{ ...base, room_name: `(min ${minNights} nights required)`, rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; MNS=${minNights}` }];
-    }
-
-    if (rooms.length === 0) {
-      let lowest = perNightFromText(bodyText);
-      if (lowest == null) {
-        const prices = pricesFromText(bodyText).filter(n => n >= 150);
-        if (prices.length === 0) {
-          console.log(`${tag} ⚠ NO MATCH      ${property.name}  ${checkIn} (${nights}n)  source=${source}`);
-          try { await page.screenshot({ path: `debug-${property.slug}-${checkIn}.png`, fullPage: true }); } catch {}
-          return [{ ...base, room_name: '(extraction failed)', rate: null, available: false, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; no rooms parsed; source=${source}` }];
-        }
-        lowest = Math.min(...prices) / nights;
+      for (const sel of [
+        '[aria-label="Dismiss sign-in info."]',
+        '[aria-label="Dismiss sign in information."]',
+        'button[aria-label*="Dismiss"]',
+      ]) {
+        try { await page.click(sel, { timeout: 500 }); break; } catch {}
       }
-      console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn} (${nights}n)  AU$${lowest.toFixed(0)}/n`);
-      return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: minNights, notes: `stay_type=${stayType}; nights=${nights}; fallback to body-text lowest; source=${source}` }];
+
+      const bodyText = await page.locator('body').innerText();
+      const isNotFound   = /page not found/i.test(bodyText);
+      const isSoldOut    = /sold out|no rooms available/i.test(bodyText);
+      const notAvailable = /not available on our site for your dates/i.test(bodyText);
+      const notBookable  = /(?:isn.t|is not|not currently|not)\s+(?:taking|accepting)\s+(?:reservations|bookings)|currently\s+(?:not bookable|unavailable)|temporarily\s+(?:closed|unavailable)/i.test(bodyText);
+
+      const mm = bodyText.match(/you need to stay (\d+)\+? nights?/i)
+              || bodyText.match(/minimum (?:stay|length of stay)[^\d]{0,24}(\d+)/i)
+              || bodyText.match(/(\d+)\s*[- ]?night minimum/i);
+      if (mm) explicitMin = Math.max(explicitMin || 0, parseInt(mm[1], 10));
+
+      // 404 and "not taking bookings" don't depend on stay length — bail immediately.
+      if (isNotFound) {
+        console.log(`${tag} ✗ 404           ${property.name} ${checkIn}`);
+        return [];
+      }
+      if (notBookable) {
+        console.log(`${tag} ⊘ NOT BOOKABLE  ${property.name}  ${checkIn}`);
+        return [{ ...base, room_name: '(property not bookable)', rate: null, available: false, min_nights: null, notes: `stay_type=${stayType}; nights=${len}; not taking bookings on booking.com` }];
+      }
+
+      const { rooms, source } = await getRoomRates(page, len);
+
+      // SUCCESS: rooms found at this length → this is the effective minimum.
+      if (rooms.length > 0) {
+        const minNights = len;               // ascending probe stops at first bookable length
+        const cheapest  = Math.min(...rooms.map(r => r.rate));
+        const badges    = rooms.filter(r => r.roomsLeft != null).length;
+        console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${minNights}n min  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n (total AU$${(cheapest * minNights).toFixed(0)})${badges ? `  (${badges} low-stock)` : ''}`);
+        return rooms.map(r => ({
+          ...base,
+          room_name: r.roomName,
+          rate: r.rate,                       // per night (Booking's averaged per-night for the stay)
+          available: true,
+          min_nights: minNights,              // 1 == bookable as a single night; >1 == real minimum
+          rooms_left: r.roomsLeft,
+          notes: `stay_type=${stayType}; nights=${minNights}; min_nights=${minNights}; source=hprt-table; probe`,
+        }));
+      }
+
+      // No structured rooms. If the page clearly has a price and isn't sold out,
+      // keep the body-text fallback (extraction failed but it IS available at this length).
+      if (!isSoldOut && !notAvailable) {
+        let lowest = perNightFromText(bodyText);
+        if (lowest == null) {
+          const prices = pricesFromText(bodyText).filter(n => n >= 150);
+          if (prices.length) lowest = Math.min(...prices) / len;
+        }
+        if (lowest != null) {
+          console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn} (${len}n)  AU$${lowest.toFixed(0)}/n`);
+          return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: len, notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; fallback to body-text lowest; source=${source}` }];
+        }
+      }
+
+      // Nothing bookable at this length. Decide whether to probe a longer stay.
+      // Weekend check-ins (Fri/Sat/Sun) escalate even without an explicit message,
+      // because Booking often just shows "sold out" for an under-minimum weekend stay.
+      const minStayHint = !!explicitMin || MIN_STAY_HINT_RE.test(bodyText) || stayType === 'weekend';
+
+      if (explicitMin && explicitMin > len) { len = explicitMin; continue; } // jump straight to the stated minimum
+      if (minStayHint && len < PROBE_MAX)   { len += 1; continue; }           // shorter stay rejected — try one night longer
+
+      // Genuinely unavailable: sold out, or no min-stay signal to chase.
+      const label = explicitMin ? `(min ${explicitMin} nights required)` : '(sold out)';
+      console.log(`${tag} • ${explicitMin ? `MIN ${explicitMin} NIGHTS` : 'SOLD OUT'}  ${property.name}  ${checkIn} (probed up to ${len}n)`);
+      return [{ ...base, room_name: label, rate: null, available: false, min_nights: explicitMin || null, notes: `stay_type=${stayType}; nights=${len}; no availability; min=${explicitMin || '?'}; source=${source}` }];
     }
 
-    const cheapest = Math.min(...rooms.map(r => r.rate));
-    const badgesSeen = rooms.filter(r => r.roomsLeft != null).length;
-    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${nights}n  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n${badgesSeen > 0 ? `  (${badgesSeen} low-stock badge${badgesSeen > 1 ? 's' : ''})` : ''}`);
-
-    return rooms.map(r => ({
-      ...base,
-      room_name: r.roomName,
-      rate: r.rate,
-      available: true,
-      min_nights: minNights,
-      rooms_left: r.roomsLeft,
-      notes: `stay_type=${stayType}; nights=${nights}; source=hprt-table`,
-    }));
+    // Exhausted PROBE_MAX without ever finding rooms.
+    const checkOut = addDays(checkIn, PROBE_MAX);
+    console.log(`${tag} • UNAVAILABLE    ${property.name}  ${checkIn} (probed 1–${PROBE_MAX}n, min=${explicitMin || '?'})`);
+    return [{ ...baseFor(checkOut), room_name: explicitMin ? `(min ${explicitMin} nights required)` : '(sold out)', rate: null, available: false, min_nights: explicitMin || null, notes: `stay_type=${stayType}; nights=${PROBE_MAX}; probe exhausted; min=${explicitMin || '?'}` }];
   } catch (err) {
     console.log(`${tag} ✗ ERROR         ${property.name} ${checkIn}: ${err.message}`);
     return [];
@@ -361,7 +395,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   }
 
   console.log(`Mode: ${TEST_MODE ? 'TEST' : 'FULL'}   Days ahead: ${DAYS_AHEAD}   Concurrency: ${CONCURRENCY}   Flush every: ${FLUSH_EVERY}`);
-  console.log(`Weekend check-ins (Fri/Sat/Sun) → 2-night stays. Other check-ins → 1-night.`);
+  console.log(`Per check-in: probe 1 night first, then up to ${PROBE_MAX} nights if a minimum-stay rule blocks shorter stays. Real per-property minimum is stored in min_nights.`);
   if (START_DATE || END_DATE) console.log(`Custom range from workflow inputs — START_DATE=${START_DATE || '(default)'}  END_DATE=${END_DATE || '(default)'}`);
   console.log(`Scrape run id: ${SCRAPE_RUN_ID}`);
   console.log(`Supabase URL: ${SUPABASE_URL}`);
@@ -382,7 +416,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
   const jobs = [];
   for (const d of dates) {
     for (const prop of PROPERTIES) {
-      jobs.push({ property: prop, checkIn: d.checkIn, checkOut: d.checkOut, stayType: d.stayType });
+      jobs.push({ property: prop, checkIn: d.checkIn });
     }
   }
 
@@ -415,7 +449,7 @@ const rand  = (a, b) => a + Math.floor(Math.random() * (b - a));
     };
 
     for (const job of queue) {
-      const rows = await scrapeOne(browser, job.property, job.checkIn, job.checkOut, job.stayType, workerId);
+      const rows = await scrapeOne(browser, job.property, job.checkIn, workerId);
       allRowsForWorker.push(...rows);
       buffer.push(...rows);
 

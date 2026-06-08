@@ -14,17 +14,10 @@
     .wslr-row { background-color: #ecfdf5; }
     .cheapest { background-color: #d1fae5; }
     .most-expensive { color: #b91c1c; }
-    .na { color: #9ca3af; font-style: italic; font-size: 11px; line-height: 1.2; }
-    .no-data-cell .na, .unavailable-cell .na { display: inline-block; max-width: 160px; }
+    .na { color: #9ca3af; font-style: italic; }
     .rate-cell .room { font-size: 11px; color: #64748b; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .rate-cell .substitution { font-size: 10px; color: #b45309; margin-top: 2px; max-width: 220px; }
     .rate-cell .fallback { font-size: 10px; color: #b45309; margin-top: 2px; }
-    /* Bug 7: visibly grey out cells with no data / unavailable */
-    .no-data-cell { background-color: #f1f5f9; background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(148,163,184,0.18) 4px 5px); }
-    .unavailable-cell { background-color: #f1f5f9; }
-    .no-data-cell.cheapest, .unavailable-cell.cheapest { background-color: #f1f5f9; }
-    /* Bug 8: minimum-nights restriction badge */
-    .min-nights-badge { display: inline-block; font-size: 10px; color: #b45309; background: #fef3c7; padding: 1px 6px; border-radius: 10px; margin-top: 3px; font-weight: 500; }
     .modal-backdrop { background: rgba(15, 23, 42, 0.5); }
 
     .heatmap-scroll { overflow-x: auto; border-radius: 8px; scroll-behavior: smooth; }
@@ -42,7 +35,7 @@
       width: 18px; height: 30px; flex-shrink: 0;
       border-right: 1px solid white; cursor: default; position: relative;
     }
-    .heat-cell.empty { background: #cbd5e1; background-image: repeating-linear-gradient(135deg, transparent 0 3px, rgba(255,255,255,0.35) 3px 4px); }
+    .heat-cell.empty { background: #f8fafc; }
     .heat-cell.sold-out { background: #1e293b; }
     .heat-cell.sold-out::after {
       content: '×'; color: rgba(255,255,255,0.6);
@@ -67,10 +60,6 @@
     .day-label.weekend { color: #0f172a; font-weight: 600; background: #f1f5f9; }
     .legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
     .modal-sticky-header { position: sticky; top: 0; background: white; z-index: 10; border-bottom: 1px solid #e2e8f0; }
-    /* Sticky filter bar — pinned by default, can be toggled off */
-    #stickyBar.sticky-pinned { position: sticky; top: 0; z-index: 30; background: linear-gradient(to bottom, #f8fafc 0%, #f8fafc 92%, rgba(248,250,252,0.92) 100%); }
-    #stickyBar.sticky-pinned::after { content: ''; position: absolute; left: 0; right: 0; bottom: -8px; height: 8px; pointer-events: none; background: linear-gradient(to bottom, rgba(15,23,42,0.06), transparent); }
-    #stickyBar.sticky-unpinned { position: static; }
     .group-pill {
       padding: 4px 10px; font-size: 12px; border-radius: 999px;
       border: 1px solid #cbd5e1; background: white; color: #475569; cursor: pointer;
@@ -172,6 +161,8 @@
         </div>
       </div>
       <div class="flex gap-2 items-center flex-wrap">
+        <button id="btnPerNight" class="px-4 py-2 rounded-md font-medium text-sm bg-slate-900 text-white">Per night</button>
+        <button id="btnTotal"    class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700">Stay total</button>
         <button id="btnExportCsv" onclick="exportCSV()" class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700 hover:bg-slate-100">Export CSV</button>
         <button onclick="openEventsModal()" class="px-4 py-2 rounded-md font-medium text-sm bg-white border border-slate-300 text-slate-700 hover:bg-slate-100">Events</button>
         <button onclick="openAdmin()" class="px-4 py-2 rounded-md font-medium text-sm bg-emerald-600 text-white">Manage properties</button>
@@ -179,36 +170,29 @@
       </div>
     </header>
 
-    <!-- Sticky-pinnable filters: match group + date range -->
-    <div id="stickyBar" class="sticky-pinned" style="margin: 0 -1.5rem; padding: 0 1.5rem;">
-      <div class="flex justify-end -mb-1 pt-2">
-        <button id="stickyToggle" onclick="toggleSticky()" class="text-xs px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 text-slate-600">📌 Unpin filters</button>
-      </div>
+    <!-- Match Group selector -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6">
+      <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type</div>
+      <div id="groupPills" class="flex flex-wrap gap-2 mb-2"></div>
+      <div class="text-xs text-slate-500" id="groupSummary"></div>
+    </div>
 
-      <!-- Match Group selector -->
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-3 mt-2">
-        <div class="text-xs uppercase tracking-wide text-slate-500 mb-2">Compare room type</div>
-        <div id="groupPills" class="flex flex-wrap gap-2 mb-2"></div>
-        <div class="text-xs text-slate-500" id="groupSummary"></div>
+    <!-- Date range -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
+      <div class="flex items-center gap-2">
+        <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
+        <input type="date" id="rangeStart" class="text-sm border border-slate-300 rounded px-2 py-1">
+        <span class="text-slate-400 text-sm">to</span>
+        <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
       </div>
-
-      <!-- Date range -->
-      <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-6 flex flex-wrap items-center gap-4">
-        <div class="flex items-center gap-2">
-          <span class="text-xs uppercase tracking-wide text-slate-500">Date range:</span>
-          <input type="date" id="rangeStart" class="text-sm border border-slate-300 rounded px-2 py-1">
-          <span class="text-slate-400 text-sm">to</span>
-          <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
-        </div>
-        <div class="flex flex-wrap gap-1">
-          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
-          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
-          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
-          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
-          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
-        </div>
-        <div class="ml-auto text-xs text-slate-500" id="coverageNote"></div>
+      <div class="flex flex-wrap gap-1">
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past30')">Past 30d</button>
+        <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('past90')">Past 90d</button>
       </div>
+      <div class="ml-auto text-xs text-slate-500" id="coverageNote"></div>
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8" id="statCards"></div>
@@ -237,7 +221,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Market view</h2>
-        <p class="text-sm text-slate-500 mt-1">Pricing patterns across mapped properties for the selected range and match group.</p>
+        <p class="text-sm text-slate-500 mt-1">Pricing patterns across mapped properties for the selected range and match group. Amber dot = substitution.</p>
       </div>
       <div class="p-6">
         <div id="longRangeStats"></div>
@@ -287,13 +271,6 @@
           <div id="perPropertyInvContainer" class="space-y-3"></div>
         </div>
 
-        <!-- Piece B0: Comparable room availability across mapped properties for the current match group -->
-        <div class="mb-10">
-          <h3 class="font-semibold text-sm mb-1 text-slate-700">Comparable room availability</h3>
-          <p class="text-xs text-slate-500 mb-3">Side-by-side calendar of the <em>currently-selected match group</em> — one row per property's comparable room. Numbers show units left from Booking.com's quantity dropdown (capped at 10 by Booking; a <strong>10</strong> can mean 10+). <strong>✓</strong> = bookable, count unknown. <strong>—</strong> = sold out / no data. Switch the match group at the top of the page to compare different room categories.</p>
-          <div id="comparableInvMatrix"></div>
-        </div>
-
         <!-- Piece B: Competitor inventory matrix (per-room-type remaining-count detail) -->
         <div class="mb-10">
           <h3 class="font-semibold text-sm mb-1 text-slate-700">Competitor inventory by room type</h3>
@@ -311,11 +288,11 @@
       </div>
     </div>
 
-    <!-- Phase 7: Rate trajectory — X = scrape date, Y = total cost across selected date range -->
+    <!-- Phase 7: Rate trajectory for a single check-in date -->
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 mt-8">
       <div class="px-6 py-4 border-b border-slate-200">
         <h2 class="text-lg font-semibold">Rate trajectory</h2>
-        <p class="text-sm text-slate-500 mt-1">Total cost of staying every night in your selected date range, plotted over time across scrapes. One line per property. Scrapes where a property is missing any night in the range show a gap rather than a misleading dip. Side panel breaks down which individual nights moved between the two most recent scrapes.</p>
+        <p class="text-sm text-slate-500 mt-1">Pick a check-in date and a WSLR room type to see how each property's comparable room rate has moved across every scrape we've taken. Reveals when competitors dropped or hiked prices.</p>
       </div>
       <div class="p-6">
         <div class="mb-3">
@@ -323,29 +300,12 @@
           <div id="trajectoryGroupPills" class="flex flex-wrap gap-2"></div>
         </div>
         <div class="flex items-center gap-3 flex-wrap mb-4">
-          <label class="text-xs uppercase tracking-wide text-slate-500">Show:</label>
-          <select id="trajectoryScrapeLimit" class="text-sm border border-slate-300 rounded px-3 py-1.5">
-            <option value="5">Last 5 scrapes</option>
-            <option value="10" selected>Last 10 scrapes</option>
-            <option value="20">Last 20 scrapes</option>
-            <option value="50">Last 50 scrapes</option>
-            <option value="0">All scrapes</option>
-          </select>
+          <label class="text-xs uppercase tracking-wide text-slate-500">Check-in date:</label>
+          <select id="trajectoryDate" class="text-sm border border-slate-300 rounded px-3 py-1.5"></select>
           <div class="text-xs text-slate-500" id="trajectoryMeta"></div>
         </div>
-        <div style="display: flex; flex-wrap: wrap; gap: 20px;">
-          <div style="flex: 2 1 520px; min-width: 0;">
-            <div style="position: relative; height: 360px;">
-              <canvas id="trajectoryChart"></canvas>
-            </div>
-            <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date range and match group yet.</div>
-          </div>
-          <div style="flex: 1 1 280px; min-width: 0;">
-            <h3 class="font-semibold text-sm mb-1 text-slate-700">Per-night moves</h3>
-            <p class="text-xs text-slate-500 mb-2">Latest scrape vs previous, in this match group + date range. Sorted by biggest swing.</p>
-            <div id="trajectoryMoves" class="border border-slate-200 rounded bg-slate-50 p-2" style="max-height: 360px; overflow-y: auto;"></div>
-          </div>
-        </div>
+        <canvas id="trajectoryChart" height="120"></canvas>
+        <div id="trajectoryEmpty" class="hidden text-sm text-slate-500 py-10 text-center">No scrape history for this date and room type yet. Pick another date or room type, or wait for more scrapes.</div>
       </div>
     </div>
 
@@ -359,19 +319,6 @@
         <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
         <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers (excluding substitutions)</h3>
         <div id="topMoversContainer" class="border border-slate-200 rounded p-3 bg-slate-50"></div>
-      </div>
-    </div>
-
-    <div class="bg-white rounded-lg shadow-sm border border-amber-200 mt-8">
-      <div class="px-6 py-4 border-b border-amber-200 bg-amber-50 rounded-t-lg">
-        <div class="flex items-center gap-2">
-          <h2 class="text-lg font-semibold text-amber-900">Data to double-check</h2>
-          <span id="outlierCount" class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 hidden"></span>
-        </div>
-        <p class="text-sm text-amber-800 mt-1">Heuristic flags for rates that look suspicious &mdash; <strong>not confirmed errors</strong>. Booking.com sometimes shows our scraper a higher non-member rate than a real browser sees, so verify these on Booking.com before trusting them. Respects the current match group and date range.</p>
-      </div>
-      <div class="p-6">
-        <div id="outlierContainer"></div>
       </div>
     </div>
 
@@ -500,7 +447,7 @@
         },
       },
       {
-        group: '1-Bedroom Cabin (standard)',
+        group: '1-Bedroom Apt (standard)',
         wslrRoom: '1BR Apartment with A/C',
         rooms: {
           'WSLR (us)': ['One-Bedroom Apartment with Air-Conditioning'],
@@ -511,7 +458,7 @@
         },
       },
       {
-        group: '1-Bedroom Cabin (terrace)',
+        group: '1-Bedroom Apt (premium)',
         wslrRoom: '1BR Apartment with Private Terrace',
         rooms: {
           'WSLR (us)': ['One-Bedroom Apartment with Private Terrace and Air-conditioning'],
@@ -522,7 +469,7 @@
         },
       },
       {
-        group: '2-Bedroom Cabin (standard)',
+        group: '2-Bedroom Apt (standard)',
         wslrRoom: '2BR Apartment with A/C',
         rooms: {
           'WSLR (us)': ['Two-Bedroom Apartment with Air-conditioning'],
@@ -543,7 +490,7 @@
         },
       },
       {
-        group: '2-Bedroom Cabin (terrace)',
+        group: '2-Bedroom Apt (premium)',
         wslrRoom: '2BR Apartment with Terrace',
         rooms: {
           'WSLR (us)': ['Two-Bedroom Apartment with Terrace and Air-conditioning'],
@@ -602,9 +549,6 @@
     const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
     const SIGNIFICANT_DELTA = 0.05;
-    // A row is flagged as a potential outlier if its rate is at least this multiple
-    // of the cheapest comparable property's rate on the same date (1.8 = 80% above).
-    const OUTLIER_MULTIPLE = 1.8;
     const PAGE_SIZE = 1000;
     const MAX_PAGES = 100;
 
@@ -660,130 +604,6 @@
       return m ? m[1] : null;
     }
     function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, "&#39;").replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-    // Returns ' (us)' if the property is WSLR AND the name doesn't already contain "(us)"
-    // (the property name in ROOM_MAPPINGS is literally "WSLR (us)", so we'd otherwise duplicate)
-    function wslrSuffix(name, isWslr) {
-      if (!isWslr) return '';
-      return /\(us\)/i.test(name) ? '' : ' (us)';
-    }
-
-    // Cached structural context about what's actually in allRows so we can
-    // give meaningful "no data" reasons instead of just "—".
-    let cachedDataContext = null;
-    function getDataContext() {
-      if (cachedDataContext) return cachedDataContext;
-      // Map scrape_run_id → { scraped_at, propsDates (Set 'prop|date') }
-      const runs = {};
-      const propsSeen = new Set();
-      const datesSeen = new Set();
-      const propDatesSeen = new Set();   // 'property|check_in' over all rows
-      for (const r of allRows) {
-        if (!runs[r.scrape_run_id]) runs[r.scrape_run_id] = { scraped_at: r.scraped_at, propsDates: new Set(), props: new Set() };
-        runs[r.scrape_run_id].propsDates.add(r.property + '|' + r.check_in);
-        runs[r.scrape_run_id].props.add(r.property);
-        propsSeen.add(r.property);
-        datesSeen.add(r.check_in);
-        propDatesSeen.add(r.property + '|' + r.check_in);
-      }
-      // Most recent scrape run wins
-      const sortedRuns = Object.entries(runs).sort(([, a], [, b]) => b.scraped_at.localeCompare(a.scraped_at));
-      const latest = sortedRuns[0];
-      cachedDataContext = {
-        latestRunId: latest ? latest[0] : null,
-        latestRunPropsDates: latest ? latest[1].propsDates : new Set(),
-        latestRunProps: latest ? latest[1].props : new Set(),
-        propsSeen, datesSeen, propDatesSeen,
-      };
-      return cachedDataContext;
-    }
-
-    // Returns a short reason string explaining why no rate is showing for (property, checkIn).
-    function getNoDataReason(property, checkIn) {
-      const ctx = getDataContext();
-      const cellKey = property + '|' + checkIn;
-      // Any rows AT ALL for this (property, date) across history?
-      const everScraped = ctx.propDatesSeen.has(cellKey);
-      if (!everScraped) {
-        // Has the property been scraped at all in the latest run?
-        if (!ctx.latestRunProps.has(property)) return 'No data (property missing from latest scrape)';
-        return 'No data (date not scraped)';
-      }
-      // Rows exist for this cell at some point — inspect what happened in the latest scrape for this cell
-      const cellRowsLatest = allRows.filter(r => r.property === property && r.check_in === checkIn && r.scrape_run_id === ctx.latestRunId);
-      if (cellRowsLatest.length === 0) {
-        return 'No data (date not scraped in latest run)';
-      }
-      // Were any bookable rows present?
-      const anyBookable = cellRowsLatest.some(r => r.rate != null && r.available !== false);
-      if (!anyBookable) {
-        // All rows were sold-out / unbookable
-        const sawSoldOutMarker = cellRowsLatest.some(r => r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name)));
-        if (sawSoldOutMarker) return 'No data (property sold out)';
-        return 'No data (all rooms unavailable)';
-      }
-      // Bookable rooms existed in the scrape, but none matched the current match group's patterns
-      return 'No data (no matching room type)';
-    }
-
-    // Estimated total inventory for (property, roomName). Tries to use a quiet
-    // baseline first (midweek August scrapes — low season, likely full stock)
-    // before falling back to the global max rooms_left ever observed.
-    function getMaxInventory(property, roomName) {
-      let augMidweek = null, globalMax = null;
-      for (const r of allRows) {
-        if (r.property !== property || r.room_name !== roomName) continue;
-        if (r.rooms_left == null) continue;
-        if (globalMax == null || r.rooms_left > globalMax) globalMax = r.rooms_left;
-        const d = new Date(r.check_in + 'T00:00:00');
-        if (d.getMonth() !== 7) continue;     // August (0-indexed)
-        const dow = d.getDay();
-        if (dow < 1 || dow > 4) continue;     // Mon-Thu midweek only
-        if (augMidweek == null || r.rooms_left > augMidweek) augMidweek = r.rooms_left;
-      }
-      return augMidweek != null ? augMidweek : globalMax;
-    }
-
-    // Same as above, but across all rooms matching the property's patterns in
-    // the current match group (used for the Comparable Room Availability matrix
-    // since each cell picks the cheapest matching room — that may vary by date).
-    function getMaxInventoryForPatterns(property, patterns) {
-      if (!patterns || patterns.length === 0) return null;
-      const lower = patterns.map(p => p.toLowerCase());
-      let augMidweek = null, globalMax = null;
-      for (const r of allRows) {
-        if (r.property !== property) continue;
-        if (r.rooms_left == null || !r.room_name) continue;
-        const rn = r.room_name.toLowerCase();
-        if (!lower.some(p => rn.includes(p))) continue;
-        if (globalMax == null || r.rooms_left > globalMax) globalMax = r.rooms_left;
-        const d = new Date(r.check_in + 'T00:00:00');
-        if (d.getMonth() !== 7) continue;
-        const dow = d.getDay();
-        if (dow < 1 || dow > 4) continue;
-        if (augMidweek == null || r.rooms_left > augMidweek) augMidweek = r.rooms_left;
-      }
-      return augMidweek != null ? augMidweek : globalMax;
-    }
-
-    // Format the "max units" indicator for row labels. Booking caps at 10, so
-    // values of 10 are likely an undercount of the true total.
-    function fmtMaxLabel(max) {
-      if (max == null) return '';
-      if (max >= 10) return '10+ units';
-      return `~${max} units`;
-    }
-
-    // Heuristic to spot scraper unit-confusion bugs (per-night vs per-stay).
-    // When prev/curr rates are almost exactly 2x or 0.5x of each other, the
-    // change is almost certainly a data error rather than a real price move.
-    function isSuspiciousRateRatio(prevRate, currRate) {
-      if (!prevRate || !currRate) return false;
-      const ratio = currRate / prevRate;
-      if (ratio >= 0.45 && ratio <= 0.55) return true;   // ~50% drop
-      if (ratio >= 1.9  && ratio <= 2.1)  return true;   // ~100% jump
-      return false;
-    }
-
     function median(arr) {
       if (!arr || arr.length === 0) return null;
       const sorted = [...arr].sort((a, b) => a - b);
@@ -916,20 +736,6 @@
     }
 
     // ---------- Date range ----------
-    function toggleSticky() {
-      const bar = document.getElementById('stickyBar');
-      const btn = document.getElementById('stickyToggle');
-      if (bar.classList.contains('sticky-pinned')) {
-        bar.classList.remove('sticky-pinned');
-        bar.classList.add('sticky-unpinned');
-        btn.textContent = '📌 Pin filters to top';
-      } else {
-        bar.classList.add('sticky-pinned');
-        bar.classList.remove('sticky-unpinned');
-        btn.textContent = '📌 Unpin filters';
-      }
-    }
-
     function setRangePreset(preset) {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -1059,7 +865,7 @@
           <div class="border border-slate-200 rounded p-3 ${p.is_wslr ? 'bg-emerald-50' : ''}">
             <div class="flex items-center justify-between mb-2">
               <div>
-                <div class="font-medium text-sm">${escAttr(p.name)}${p.is_wslr && !/\(us\)/i.test(p.name) ? ' <span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
+                <div class="font-medium text-sm">${escAttr(p.name)} ${p.is_wslr ? '<span class="text-xs text-emerald-700 ml-1">(us)</span>' : ''}</div>
                 <div class="text-xs text-slate-500">${escAttr(p.slug)}</div>
               </div>
               <div class="flex items-center gap-2">
@@ -1090,8 +896,8 @@
       }
       document.getElementById('scrapeStart').addEventListener('change', updateScrapeEstimate);
       document.getElementById('scrapeEnd').addEventListener('change', updateScrapeEstimate);
-      const trajLimitSel = document.getElementById('trajectoryScrapeLimit');
-      if (trajLimitSel) trajLimitSel.addEventListener('change', renderTrajectory);
+      const trajSel = document.getElementById('trajectoryDate');
+      if (trajSel) trajSel.addEventListener('change', renderTrajectory);
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
           if (!document.getElementById('adminModal').classList.contains('hidden')) closeAdmin();
@@ -1141,7 +947,6 @@
       if (error) { document.getElementById('lastUpdated').textContent = 'Error loading rates: ' + error.message; return; }
       allRows = data || [];
       cachedDateMap = null;
-      cachedDataContext = null;
       renderGroupPills();
       render();
     }
@@ -1422,8 +1227,9 @@
       renderInventory();
       renderTrends(allDates);
       renderTopMovers(allDates);
+      renderTrajectoryPills();
+      populateTrajectoryDates(allDates);
       renderTrajectory();
-      renderOutliers(allDates);
     }
 
     function renderCoverageNote(allDates) {
@@ -1481,20 +1287,6 @@
       `).join('');
     }
 
-    // For a record where rec.rate is null, work out the best human reason.
-    function explainNoRate(rec) {
-      if (!rec) return 'no data';
-      if (rec.min_nights && rec.min_nights > 1) return `${rec.min_nights}-night min`;
-      const rn = (rec.room_name || '').toLowerCase();
-      if (rn.includes('sold out')) return 'sold out';
-      if (rn.includes('no room') || rn.includes('unavailable') || rn.includes('not available')) return 'unavailable';
-      if (rec.notes) {
-        const m = rec.notes.match(/reason=([^;]+)/);
-        if (m) return m[1].replace(/_/g, ' ');
-      }
-      return (rec.room_name || 'unavailable').replace(/[()]/g, '');
-    }
-
     function renderTable(allDates) {
       const visible = allDates.slice(0, TABLE_CAP);
       const truncated = allDates.length > TABLE_CAP;
@@ -1518,15 +1310,10 @@
             if (displayed === min) cls += ' cheapest';
             else if (displayed === max) cls += ' most-expensive';
           }
-          // ---- BUG 7 FIX: no record at all - light grey + label with inferred reason ----
-          if (!rec) {
-            const reason = getNoDataReason(prop.name, d.check_in);
-            return `<td class="${cls} no-data-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
-          }
-          // ---- BUG 7 FIX: rec exists but no rate - show specific reason on grey ----
+          if (!rec) return `<td class="${cls}">${fmtAUD(null)}</td>`;
           if (rec.rate == null) {
-            const reason = explainNoRate(rec);
-            return `<td class="${cls} unavailable-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
+            const reason = rec.room_name?.replace(/[()]/g, '') || 'unavailable';
+            return `<td class="${cls}"><span class="na">${escAttr(reason)}</span></td>`;
           }
           let extras = '';
           if (isSubstitution(rec)) {
@@ -1538,14 +1325,9 @@
           const roomLine = bookingUrl
             ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
             : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
-          // ---- BUG 8 FIX: show minimum-night restriction badge when applicable ----
-          const minNightsBadge = (rec.min_nights && rec.min_nights > 1)
-            ? `<div class="min-nights-badge" title="Booking.com is enforcing a ${rec.min_nights}-night minimum stay for this date">${rec.min_nights}-night min</div>`
-            : '';
           return `<td class="${cls}">
             <div class="font-semibold">${fmtAUD(displayed)}</div>
             ${roomLine}
-            ${minNightsBadge}
             ${extras}
           </td>`;
         }).join('');
@@ -1773,12 +1555,15 @@
           if (!r) return `<div class="heat-cell empty" title="${escAttr(p.name + ' ' + d.check_in + ': no data')}"></div>`;
           if (r.rate == null) return `<div class="heat-cell sold-out" title="${escAttr(p.name + ' ' + d.check_in + ': sold out (' + (r.room_name || '') + ')')}"></div>`;
           const color = getColor(r.rate, d.check_in);
-          const title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
-          return `<div class="heat-cell" style="background: ${color}" title="${escAttr(title)}"></div>`;
+          const sub = isSubstitution(r);
+          let title = p.name + ' ' + fmtDate(d.check_in) + ': AU$' + Math.round(r.rate) + '/n — ' + (r.room_name || '');
+          if (sub) title += ' ⚠ SUBSTITUTION — was AU$' + Math.round(r.prev.rate) + ' (' + r.prev.room_name + ')';
+          const cellCls = 'heat-cell' + (sub ? ' substitution' : '');
+          return `<div class="${cellCls}" style="background: ${color}" title="${escAttr(title)}"></div>`;
         }).join('');
         return `<div class="heat-row">
           <div class="row-label ${p.is_wslr ? 'wslr' : ''}">
-            <div>${escAttr(p.name)}${wslrSuffix(p.name, p.is_wslr)}</div>
+            <div>${escAttr(p.name)}${p.is_wslr ? ' (us)' : ''}</div>
             <div class="sub-room">${escAttr(roomShort)}</div>
           </div>
           <div class="cells-container">${cells}</div>
@@ -1798,12 +1583,12 @@
            <span class="legend-swatch ml-3" style="background:hsl(65,65%,55%)"></span>mid
            <span class="legend-swatch ml-3" style="background:hsl(0,65%,55%)"></span>expensive
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data`
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`
         : `<span class="legend-swatch" style="background:hsl(130,60%,50%)"></span>cheaper than market
            <span class="legend-swatch ml-3" style="background:hsl(0,0%,60%)"></span>at market
            <span class="legend-swatch ml-3" style="background:hsl(0,60%,50%)"></span>above market
            <span class="legend-swatch ml-3" style="background:#1e293b"></span>sold out
-           <span class="legend-swatch ml-3" style="background:#cbd5e1;background-image:repeating-linear-gradient(135deg,transparent 0 3px,rgba(255,255,255,0.35) 3px 4px)"></span>no data`;
+           <span class="ml-3"><span style="display:inline-block;width:5px;height:5px;background:#f59e0b;border-radius:50%;vertical-align:middle;"></span> substitution</span>`;
       document.getElementById('heatmapLegend').innerHTML = legendHtml;
     }
 
@@ -1848,7 +1633,6 @@
     function renderInventory() {
       renderWslrCalendar();
       renderPerPropertyInventory();
-      renderComparableInventoryMatrix();
       renderCompetitorInventoryMatrix();
       renderSelloutLead();
     }
@@ -2036,7 +1820,7 @@
         return `
           <div class="border rounded ${cardCls}">
             <div class="px-4 py-2 border-b ${headerCls} flex justify-between items-center">
-              <div class="font-medium text-sm">${escAttr(prop)}${isWslr && !/\(us\)/i.test(prop) ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
+              <div class="font-medium text-sm">${escAttr(prop)}${isWslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
               <div class="text-xs text-slate-500">${rooms.length} room ${rooms.length === 1 ? 'type' : 'types'} · ${totalDates} dates of data</div>
             </div>
             <div class="px-4 py-2">
@@ -2045,215 +1829,6 @@
           </div>
         `;
       }).join('');
-    }
-
-    // ==================================================================
-    //  COMPARABLE ROOM AVAILABILITY (grouped by current match group)
-    // ==================================================================
-    //
-    // For each property in the active match group, walks every (check_in)
-    // in the current dashboard date range, looks at the LATEST scrape for
-    // that cell, picks the cheapest mapped room, and returns its status:
-    //   bookable  — rate present (may have a roomsLeft count)
-    //   sold_out  — row exists but rate is null
-    //   no_data   — no record at all
-    function buildComparableInventoryMatrix() {
-      const { allDates } = buildDateMap();
-      const mappedProps = activeMappedProperties();
-      if (mappedProps.length === 0 || allDates.length === 0) return null;
-      const dates = allDates.map(d => d.check_in);
-      const dateSet = new Set(dates);
-
-      // (property, check_in) -> latest scrape's matching record
-      const cells = {};   // cells[property][check_in] = { status, rate, roomsLeft, roomName, minNights }
-      for (const p of mappedProps) cells[p.name] = {};
-
-      // Group rows by (property, check_in, scrape_run_id)
-      const byCellRun = {};
-      for (const r of allRows) {
-        if (!dateSet.has(r.check_in)) continue;
-        const propMatch = mappedProps.find(p => p.name === r.property);
-        if (!propMatch) continue;
-        const k = r.property + '|' + r.check_in;
-        if (!byCellRun[k]) byCellRun[k] = {};
-        if (!byCellRun[k][r.scrape_run_id]) byCellRun[k][r.scrape_run_id] = { scraped_at: r.scraped_at, rows: [] };
-        byCellRun[k][r.scrape_run_id].rows.push(r);
-      }
-
-      for (const k of Object.keys(byCellRun)) {
-        const [property, checkIn] = k.split('|');
-        const patterns = patternsFor(property);
-        if (!patterns) continue;
-        // Pick the latest scrape run for this (property, check_in)
-        const runs = Object.entries(byCellRun[k]).sort(([, a], [, b]) => (b.scraped_at > a.scraped_at ? 1 : -1));
-        const latest = runs[0][1];
-        // From the latest scrape, find the cheapest matching mapped room
-        const matched = latest.rows.filter(r => {
-          const rn = (r.room_name || '').toLowerCase();
-          return patterns.some(pat => rn.includes(pat.toLowerCase()));
-        });
-        if (matched.length === 0) {
-          // No matching mapped room observed → was the property fully sold out this scrape?
-          const sawSoldOut = latest.rows.some(r => r.room_name === '(sold out)' || (r.available === false && !isRealRoomName(r.room_name)));
-          cells[property][checkIn] = { status: sawSoldOut ? 'sold_out' : 'no_data' };
-          continue;
-        }
-        // Prefer bookable; if all are unbookable, mark sold_out
-        const bookable = matched.filter(r => r.rate != null && r.available !== false);
-        if (bookable.length === 0) {
-          // All matched rows had no rate
-          const rec = matched[0];
-          cells[property][checkIn] = {
-            status: 'sold_out',
-            roomName: rec.room_name,
-            minNights: rec.min_nights || null,
-          };
-          continue;
-        }
-        // Cheapest bookable
-        let best = bookable[0];
-        for (const r of bookable) if (r.rate < best.rate) best = r;
-        cells[property][checkIn] = {
-          status: 'bookable',
-          rate: best.rate,
-          roomsLeft: best.rooms_left != null ? best.rooms_left : null,
-          roomName: best.room_name,
-          minNights: best.min_nights || null,
-        };
-      }
-
-      // Fill in no_data for any cell we never saw
-      for (const p of mappedProps) {
-        for (const d of dates) {
-          if (!cells[p.name][d]) cells[p.name][d] = { status: 'no_data' };
-        }
-      }
-
-      return { dates, mappedProps, cells };
-    }
-
-    function renderComparableInventoryMatrix() {
-      const container = document.getElementById('comparableInvMatrix');
-      if (!container) return;
-      const data = buildComparableInventoryMatrix();
-      if (!data) {
-        container.innerHTML = '<p class="text-sm text-slate-500">No data in this range for the selected match group.</p>';
-        return;
-      }
-      const { dates, mappedProps, cells } = data;
-      const CELL_W = 30;
-      const groupLabel = ROOM_MAPPINGS[currentGroupIdx]?.group || '';
-
-      // Month + day header rows (same visual treatment as competitor inventory matrix)
-      const monthGroups = [];
-      let curMonth = null, curCount = 0;
-      for (const d of dates) {
-        const dt = new Date(d + 'T00:00:00');
-        const key = dt.getFullYear() + '-' + dt.getMonth();
-        if (key !== curMonth) {
-          if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
-          curMonth = key; curCount = 1;
-        } else curCount++;
-      }
-      if (curMonth !== null) monthGroups.push({ key: curMonth, count: curCount });
-
-      const monthLabels = monthGroups.map(g => {
-        const [y, m] = g.key.split('-').map(Number);
-        const name = new Date(y, m, 1).toLocaleDateString('en-AU', { month: 'short' });
-        return `<div style="width: ${g.count * CELL_W}px; height: 20px; font-size: 10px; font-weight: 600; color: #475569; display: flex; align-items: center; padding-left: 4px; border-right: 1px solid #e2e8f0; background: #f8fafc; text-transform: uppercase; flex-shrink: 0;">${name}</div>`;
-      }).join('');
-
-      const dayLabels = dates.map(d => {
-        const dt = new Date(d + 'T00:00:00');
-        const dow = dt.getDay();
-        const isWeekend = dow === 5 || dow === 6;
-        return `<div style="width: ${CELL_W}px; height: 20px; font-size: 9px; color: ${isWeekend ? '#0f172a' : '#94a3b8'}; font-weight: ${isWeekend ? '700' : '400'}; background: ${isWeekend ? '#f1f5f9' : 'white'}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; border-right: 1px solid #f1f5f9;">${dt.getDate()}</div>`;
-      }).join('');
-
-      // Sort properties: WSLR first, then alphabetical
-      const sorted = [...mappedProps].sort((a, b) => {
-        if (a.is_wslr) return -1;
-        if (b.is_wslr) return 1;
-        return a.name.localeCompare(b.name);
-      });
-
-      const rows = sorted.map(prop => {
-        const propCells = cells[prop.name];
-        const patterns = patternsFor(prop.name);
-        const maxInv = getMaxInventoryForPatterns(prop.name, patterns);
-        const cellsHtml = dates.map(d => {
-          const dt = new Date(d + 'T00:00:00');
-          const dow = dt.getDay();
-          const isWeekend = dow === 5 || dow === 6;
-          const wkBg = isWeekend ? '#f8fafc' : 'white';
-          const cell = propCells[d];
-          if (!cell || cell.status === 'no_data') {
-            const reason = getNoDataReason(prop.name, d);
-            return `<div style="width: ${CELL_W}px; height: 24px; background: #f1f5f9; background-image: repeating-linear-gradient(135deg, transparent 0 4px, rgba(148,163,184,0.25) 4px 5px); flex-shrink: 0; border-right: 1px solid #f1f5f9;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': ' + reason)}"></div>`;
-          }
-          if (cell.status === 'sold_out') {
-            const minTxt = (cell.minNights && cell.minNights > 1) ? ` · ${cell.minNights}-night min in effect` : '';
-            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #cbd5e1;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': sold out / unavailable' + minTxt)}">—</div>`;
-          }
-          // bookable
-          const left = cell.roomsLeft;
-          const rateLabel = `AU$${Math.round(cell.rate)}/n`;
-          const minTxt = (cell.minNights && cell.minNights > 1) ? ` · ${cell.minNights}-night min` : '';
-          const maxTxt = maxInv != null ? ` of ~${maxInv}${maxInv >= 10 ? '+' : ''}` : '';
-          if (left != null) {
-            const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : left >= 10 ? '#0891b2' : '#059669';
-            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': ' + left + maxTxt + ' left · ' + rateLabel + minTxt)}">${left}</div>`;
-          }
-          // Bookable, count not shown by Booking. Use max inventory as the inferred floor.
-          if (maxInv != null) {
-            const label = maxInv >= 10 ? '10+' : '≥' + maxInv;
-            const color = maxInv >= 10 ? '#0891b2' : maxInv >= 5 ? '#059669' : '#d97706';
-            return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: ${color};" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': bookable, count not shown (max ever seen: ' + maxInv + (maxInv >= 10 ? '+' : '') + ') · ' + rateLabel + minTxt)}">${label}</div>`;
-          }
-          return `<div style="width: ${CELL_W}px; height: 24px; background: ${wkBg}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(prop.name + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel + minTxt)}">✓</div>`;
-        }).join('');
-
-        const roomLbl = roomLabelFor(prop.name);
-        const roomShort = roomLbl && roomLbl.length > 28 ? roomLbl.slice(0, 28) + '…' : roomLbl;
-        const tag = wslrSuffix(prop.name, prop.is_wslr);
-        const maxLbl = fmtMaxLabel(maxInv);
-        return `
-          <div style="display: flex; align-items: stretch; border-bottom: 1px solid #f1f5f9; ${prop.is_wslr ? 'background: #ecfdf5;' : ''}">
-            <div style="width: 220px; flex-shrink: 0; padding: 6px 10px; font-size: 12px; position: sticky; left: 0; background: ${prop.is_wslr ? '#ecfdf5' : 'white'}; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;" title="${escAttr(prop.name + ' · ' + roomLbl + (maxLbl ? ' · ' + maxLbl : ''))}">
-              <div class="font-medium">${escAttr(prop.name)}${tag}${maxLbl ? ` <span style="font-size:10px;color:#0891b2;font-weight:500;">· ${maxLbl}</span>` : ''}</div>
-              <div style="font-size: 10px; color: #64748b; margin-top: 1px;">${escAttr(roomShort)}</div>
-            </div>
-            <div style="display: flex; flex-wrap: nowrap;">${cellsHtml}</div>
-          </div>
-        `;
-      }).join('');
-
-      container.innerHTML = `
-        <div class="border border-slate-200 rounded bg-white">
-          <div class="px-4 py-2 border-b border-slate-200 bg-slate-50 flex items-center justify-between flex-wrap gap-2">
-            <div class="font-medium text-sm">${escAttr(groupLabel)} · ${mappedProps.length} properties</div>
-            <div class="text-xs text-slate-500 flex flex-wrap gap-3 items-center">
-              <span><span style="display:inline-block;min-width:18px;text-align:center;color:#059669;font-weight:700;">✓</span>bookable</span>
-              <span><span style="display:inline-block;min-width:18px;text-align:center;color:#dc2626;font-weight:700;">1</span>/<span style="color:#ea580c;font-weight:700;">2</span>/<span style="color:#d97706;font-weight:700;">3-4</span>/<span style="color:#059669;font-weight:700;">5-9</span>/<span style="color:#0891b2;font-weight:700;">10+</span> rooms left</span>
-              <span><span style="display:inline-block;min-width:18px;text-align:center;color:#cbd5e1;">—</span>sold out</span>
-              <span><span style="display:inline-block;width:14px;height:10px;vertical-align:middle;background:#f1f5f9;background-image:repeating-linear-gradient(135deg,transparent 0 4px,rgba(148,163,184,0.4) 4px 5px);"></span> no data</span>
-            </div>
-          </div>
-          <div style="overflow-x: auto;">
-            <div style="display: inline-block; min-width: 100%;">
-              <div style="display: flex;">
-                <div style="width: 220px; flex-shrink: 0; border-right: 1px solid #e2e8f0; background: white;"></div>
-                <div style="display: flex; flex-wrap: nowrap;">${monthLabels}</div>
-              </div>
-              <div style="display: flex;">
-                <div style="width: 220px; flex-shrink: 0; border-right: 1px solid #e2e8f0; background: white;"></div>
-                <div style="display: flex; flex-wrap: nowrap;">${dayLabels}</div>
-              </div>
-              ${rows}
-            </div>
-          </div>
-        </div>
-      `;
     }
 
     // Build per-property → per-room-type → per-date map from latest scrape.
@@ -2355,7 +1930,6 @@
         }).join('');
 
         const roomRows = rooms.map(roomName => {
-          const maxInv = getMaxInventory(prop, roomName);
           const cells = dates.map(d => {
             const dt = new Date(d + 'T00:00:00');
             const dow = dt.getDay();
@@ -2371,29 +1945,18 @@
             // Bookable
             const left = slot.roomsLeft;
             const rateLabel = `AU$${Math.round(slot.rate)}/n`;
-            const maxTxt = maxInv != null ? ` of ~${maxInv}${maxInv >= 10 ? '+' : ''}` : '';
             if (left != null) {
               // Low-stock badge — color by remaining count
-              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : left >= 10 ? '#0891b2' : '#059669';
-              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': ' + left + maxTxt + ' left at this price · ' + rateLabel)}">${left}</div>`;
+              const color = left === 1 ? '#dc2626' : left <= 2 ? '#ea580c' : left <= 4 ? '#d97706' : '#059669';
+              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': only ' + left + ' left at this price · ' + rateLabel)}">${left}</div>`;
             }
-            // Bookable, count not shown by Booking. Use max inventory as the inferred floor.
-            if (maxInv != null) {
-              const label = maxInv >= 10 ? '10+' : '≥' + maxInv;
-              const color = maxInv >= 10 ? '#0891b2' : maxInv >= 5 ? '#059669' : '#d97706';
-              return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: ${color};" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable, count not shown (max ever seen: ' + maxInv + (maxInv >= 10 ? '+' : '') + ') · ' + rateLabel)}">${label}</div>`;
-            }
-            // Bookable, count unknown and no max ever seen
+            // Bookable, count unknown
             return `<div style="width: ${CELL_W}px; height: 24px; background: ${isWeekend ? '#f8fafc' : 'white'}; flex-shrink: 0; border-right: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #059669;" title="${escAttr(roomName + ' · ' + fmtDate(d) + ': bookable · ' + rateLabel)}">✓</div>`;
           }).join('');
           const shortName = roomName.length > 30 ? roomName.slice(0, 30) + '…' : roomName;
-          const maxLbl = fmtMaxLabel(maxInv);
           return `
             <div style="display: flex; align-items: stretch; border-bottom: 1px solid #f1f5f9;">
-              <div style="width: 200px; flex-shrink: 0; padding: 4px 10px; font-size: 11px; position: sticky; left: 0; background: white; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: center;" title="${escAttr(roomName + (maxLbl ? ' · ' + maxLbl : ''))}">
-                <div>${escAttr(shortName)}</div>
-                ${maxLbl ? `<div style="font-size: 10px; color: #0891b2; font-weight: 500; margin-top: 1px;">${maxLbl}</div>` : ''}
-              </div>
+              <div style="width: 200px; flex-shrink: 0; padding: 4px 10px; font-size: 11px; position: sticky; left: 0; background: white; z-index: 2; border-right: 1px solid #e2e8f0; display: flex; align-items: center;" title="${escAttr(roomName)}">${escAttr(shortName)}</div>
               <div style="display: flex; flex-wrap: nowrap;">${cells}</div>
             </div>
           `;
@@ -2522,7 +2085,7 @@
         return `
           <div class="border border-slate-200 rounded p-4 ${t.isWslr ? 'bg-emerald-50' : 'bg-white'}">
             <div class="flex items-center justify-between mb-2">
-              <div class="font-medium text-sm">${escAttr(t.name)}${t.isWslr && !/\(us\)/i.test(t.name) ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
+              <div class="font-medium text-sm">${escAttr(t.name)}${t.isWslr ? ' <span class="text-xs text-emerald-700">(us)</span>' : ''}</div>
               <div class="text-lg font-bold ${changeColor}">${changeStr}</div>
             </div>
             <div class="text-xs text-slate-500 mb-2">
@@ -2547,12 +2110,6 @@
           const r = d.props[p.name];
           if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
           if (isSubstitution(r)) continue;
-          // ---- BUG 1 FIX: filter implausible rate movements ----
-          // 1) Suspicious ~50% halving/doubling = scraper unit confusion, not a real move
-          if (isSuspiciousRateRatio(r.prev.rate, r.rate)) continue;
-          // 2) WSLR motel rooms never sell below $100 (user-verified sanity floor)
-          if (p.is_wslr && (r.rate < 100 || r.prev.rate < 100)) continue;
-          // ---- end bug 1 fix ----
           const delta = (r.rate - r.prev.rate) / r.prev.rate;
           if (Math.abs(delta) < SIGNIFICANT_DELTA) continue;
           movers.push({
@@ -2574,7 +2131,7 @@
         return `
           <div class="flex justify-between text-sm py-2 border-b border-slate-100">
             <div>
-              <div class="font-medium ${m.isWslr ? 'text-emerald-700' : ''}">${escAttr(m.property)}${wslrSuffix(m.property, m.isWslr)} · ${fmtDate(m.check_in)}</div>
+              <div class="font-medium ${m.isWslr ? 'text-emerald-700' : ''}">${escAttr(m.property)}${m.isWslr ? ' (us)' : ''} · ${fmtDate(m.check_in)}</div>
               <div class="text-xs text-slate-500">same room: ${escAttr(m.currRoom)}</div>
             </div>
             <div class="text-right ${color}">
@@ -2584,119 +2141,6 @@
           </div>
         `;
       }).join('');
-    }
-
-    // ==================================================================
-    //  DATA TO DOUBLE-CHECK — heuristic outlier flags
-    //  Two independent signals (a row trips if EITHER fires):
-    //   1) Cross-comparable: rate >= OUTLIER_MULTIPLE x the cheapest OTHER
-    //      mapped property on the same date (catches stale/wrong-rate-plan
-    //      captures like Corrimal's $315 vs a $143 comparable).
-    //   2) Temporal jump: rate is ~2x or ~0.5x its own previous scrape
-    //      (reuses isSuspiciousRateRatio — catches sudden unit-confusion swings).
-    // ==================================================================
-    function renderOutliers(allDates) {
-      const mappedProps = activeMappedProperties();
-      const flags = [];
-
-      for (const d of allDates) {
-        // Displayed (cheapest mapped) rate per property on this date, valid only
-        const cells = mappedProps
-          .map(p => ({ p, rec: d.props[p.name] }))
-          .filter(x => x.rec && x.rec.rate != null);
-        if (cells.length === 0) continue;
-
-        for (const { p, rec } of cells) {
-          const reasons = [];
-
-          // Signal 1: cross-comparable
-          const otherRates = cells.filter(c => c.p.name !== p.name).map(c => c.rec.rate);
-          if (otherRates.length >= 1) {
-            const cheapestOther = Math.min(...otherRates);
-            if (cheapestOther > 0 && rec.rate >= OUTLIER_MULTIPLE * cheapestOther) {
-              const mult = rec.rate / cheapestOther;
-              reasons.push({
-                text: `${mult.toFixed(1)}× the cheapest comparable (AU$${Math.round(cheapestOther)}) on this date`,
-                severity: mult,
-              });
-            }
-          }
-
-          // Signal 2: temporal jump vs previous scrape
-          if (rec.prev && rec.prev.rate != null && isSuspiciousRateRatio(rec.prev.rate, rec.rate)) {
-            const ratio = rec.rate / rec.prev.rate;
-            reasons.push({
-              text: ratio >= 1
-                ? `Roughly doubled vs previous scrape (AU$${Math.round(rec.prev.rate)} → AU$${Math.round(rec.rate)})`
-                : `Roughly halved vs previous scrape (AU$${Math.round(rec.prev.rate)} → AU$${Math.round(rec.rate)})`,
-              severity: ratio >= 1 ? ratio : 1 / ratio,
-            });
-          }
-
-          if (reasons.length > 0) {
-            flags.push({
-              property: p.name,
-              isWslr: p.is_wslr,
-              check_in: d.check_in,
-              check_out: d.check_out,
-              room: rec.room_name,
-              rate: rec.rate,
-              slug: rec.property_slug,
-              reasons,
-              severity: Math.max(...reasons.map(r => r.severity)),
-            });
-          }
-        }
-      }
-
-      flags.sort((a, b) => b.severity - a.severity);
-
-      const container = document.getElementById('outlierContainer');
-      const badge = document.getElementById('outlierCount');
-
-      if (flags.length === 0) {
-        badge.classList.add('hidden');
-        container.innerHTML = '<p class="text-sm text-slate-500 py-3">No suspicious rates detected in this range and match group. ✓</p>';
-        return;
-      }
-
-      badge.textContent = `${flags.length} to check`;
-      badge.classList.remove('hidden');
-
-      const rows = flags.map(f => {
-        const bookingUrl = f.slug
-          ? `https://www.booking.com/hotel/au/${f.slug}.en-gb.html?checkin=${f.check_in}&checkout=${f.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD`
-          : null;
-        const reasonsHtml = f.reasons.map(r => `<div class="text-xs text-amber-800">⚠ ${escAttr(r.text)}</div>`).join('');
-        const verifyLink = bookingUrl
-          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="text-xs text-amber-900 underline hover:text-amber-700 whitespace-nowrap">Verify on Booking.com ↗</a>`
-          : '';
-        return `
-          <tr class="border-t border-amber-100">
-            <td class="py-2 px-3 align-top whitespace-nowrap font-medium">${fmtDate(f.check_in)}</td>
-            <td class="py-2 px-3 align-top">
-              <div class="font-medium ${f.isWslr ? 'text-emerald-700' : ''}">${escAttr(f.property)}${wslrSuffix(f.property, f.isWslr)}</div>
-              <div class="text-xs text-slate-500">${escAttr(f.room || '')}</div>
-            </td>
-            <td class="py-2 px-3 align-top text-right font-semibold text-rose-700 whitespace-nowrap">AU$${Math.round(f.rate)}</td>
-            <td class="py-2 px-3 align-top">${reasonsHtml}</td>
-            <td class="py-2 px-3 align-top text-right">${verifyLink}</td>
-          </tr>`;
-      }).join('');
-
-      container.innerHTML = `
-        <table class="w-full text-sm">
-          <thead>
-            <tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-amber-200">
-              <th class="py-2 px-3">Date</th>
-              <th class="py-2 px-3">Property / room</th>
-              <th class="py-2 px-3 text-right">Flagged rate</th>
-              <th class="py-2 px-3">Why flagged</th>
-              <th class="py-2 px-3 text-right">Check</th>
-            </tr>
-          </thead>
-          <tbody>${rows}</tbody>
-        </table>`;
     }
 
     // ==================================================================
@@ -2788,10 +2232,61 @@
     }
 
     // ==================================================================
-    //  RATE TRAJECTORY (X = scrape date, Y = total cost across range)
+    //  PHASE 7 — RATE TRAJECTORY (per-date time-series across scrapes)
     // ==================================================================
+    function populateTrajectoryDates(allDates) {
+      const sel = document.getElementById('trajectoryDate');
+      if (!sel) return;
+      const prevValue = sel.value;
+      if (!allDates || allDates.length === 0) {
+        sel.innerHTML = '<option value="">No dates in range</option>';
+        return;
+      }
+      sel.innerHTML = allDates.map(d => `<option value="${d.check_in}">${fmtDate(d.check_in)}${d.nights && d.nights !== '1' ? ' (' + d.nights + 'n)' : ''}</option>`).join('');
+      if (prevValue && allDates.some(d => d.check_in === prevValue)) {
+        sel.value = prevValue;
+      }
+    }
 
-    function renderTrajectoryGroupPills() {
+    function buildTrajectory(checkInDate) {
+      // For one check_in date + the current match group, group rows by
+      // (property, scrape_run_id), take cheapest matching room per group,
+      // sort chronologically.
+      const rows = allRows.filter(r => r.check_in === checkInDate);
+      if (rows.length === 0) return null;
+      // Only keep rooms that match patterns for that property in the current group
+      const matched = rows.filter(r => {
+        const patterns = patternsFor(r.property);
+        if (!patterns) return false;
+        const rn = (r.room_name || '').toLowerCase();
+        return patterns.some(p => rn.includes(p.toLowerCase()));
+      });
+      if (matched.length === 0) return null;
+
+      // property -> scrape_run_id -> { scraped_at, cheapestRate }
+      const byProp = {};
+      for (const r of matched) {
+        if (!byProp[r.property]) byProp[r.property] = {};
+        if (!byProp[r.property][r.scrape_run_id]) {
+          byProp[r.property][r.scrape_run_id] = { scraped_at: r.scraped_at, rate: r.rate };
+        } else {
+          const slot = byProp[r.property][r.scrape_run_id];
+          if (r.rate != null && (slot.rate == null || r.rate < slot.rate)) slot.rate = r.rate;
+        }
+      }
+      const series = {};
+      const allScrapeTimes = new Set();
+      for (const property of Object.keys(byProp)) {
+        const points = Object.values(byProp[property])
+          .map(p => ({ scraped_at: p.scraped_at, rate: p.rate }))
+          .sort((a, b) => a.scraped_at.localeCompare(b.scraped_at));
+        series[property] = points;
+        points.forEach(p => allScrapeTimes.add(p.scraped_at));
+      }
+      return { series, scrapeTimes: [...allScrapeTimes].sort() };
+    }
+
+    function renderTrajectoryPills() {
       const container = document.getElementById('trajectoryGroupPills');
       if (!container) return;
       container.innerHTML = ROOM_MAPPINGS.map((m, i) =>
@@ -2799,201 +2294,82 @@
       ).join('');
     }
 
-    // Builds trajectory data:
-    //   For each scrape_run_id and each mapped property, sum the cheapest matching
-    //   per-night rate across every check-in date in the current dashboard range.
-    //   If a property is missing data for ANY date in the range for a given scrape,
-    //   that scrape's point is null for that property (line shows a gap).
-    // Returns: { runIds[asc by scraped_at], runStamps{runId: scraped_at}, datasetsByProp{name: total[]} }
-    function buildTrajectoryV3(allDates, mappedProps, scrapeLimit) {
-      if (allDates.length === 0 || mappedProps.length === 0) return null;
-      const dateList = allDates.map(d => d.check_in);
-      const dateSet = new Set(dateList);
-
-      // (scrape_run_id, property) -> { scraped_at, ratesByDate{date: cheapestRate} }
-      const slots = {};
-      for (const r of allRows) {
-        if (!dateSet.has(r.check_in)) continue;
-        const propRec = mappedProps.find(p => p.name === r.property);
-        if (!propRec) continue;
-        if (r.rate == null) continue;
-        const patterns = patternsFor(r.property);
-        if (!patterns) continue;
-        const rn = (r.room_name || '').toLowerCase();
-        if (!patterns.some(p => rn.includes(p.toLowerCase()))) continue;
-        const key = r.scrape_run_id + '|' + r.property;
-        if (!slots[key]) slots[key] = { scraped_at: r.scraped_at, ratesByDate: {} };
-        const cur = slots[key].ratesByDate[r.check_in];
-        if (cur == null || r.rate < cur) slots[key].ratesByDate[r.check_in] = r.rate;
-      }
-
-      // Collect distinct scrape run ids with their scraped_at, sorted asc (oldest → newest)
-      const runStamps = {};
-      for (const key of Object.keys(slots)) {
-        const runId = key.split('|')[0];
-        if (!runStamps[runId] || slots[key].scraped_at < runStamps[runId]) runStamps[runId] = slots[key].scraped_at;
-      }
-      const allRunIds = Object.keys(runStamps).sort((a, b) => runStamps[a].localeCompare(runStamps[b]));
-      if (allRunIds.length === 0) return null;
-      // Apply "last N scrapes" cap
-      const runIds = (scrapeLimit > 0 && allRunIds.length > scrapeLimit) ? allRunIds.slice(-scrapeLimit) : allRunIds;
-
-      // Build per-property totals, null when any date is missing
-      const datasetsByProp = {};
-      for (const p of mappedProps) {
-        datasetsByProp[p.name] = runIds.map(runId => {
-          const slot = slots[runId + '|' + p.name];
-          if (!slot) return null;
-          let total = 0;
-          for (const d of dateList) {
-            const rate = slot.ratesByDate[d];
-            if (rate == null) return null;
-            total += rate;
-          }
-          return total;
-        });
-      }
-      return { runIds, runStamps, datasetsByProp, totalRuns: allRunIds.length, nightsInRange: dateList.length };
-    }
-
-    // Renders the side panel: per-night rate moves between the LAST two scrapes
-    // for the current match group + date range. Same filters as Top Movers.
-    function renderTrajectoryMoves(allDates) {
-      const container = document.getElementById('trajectoryMoves');
-      if (!container) return;
-      const mappedProps = activeMappedProperties();
-      const moves = [];
-      for (const d of allDates) {
-        for (const p of mappedProps) {
-          const r = d.props[p.name];
-          if (!r || r.rate == null || !r.prev || r.prev.rate == null) continue;
-          if (isSubstitution(r)) continue;
-          if (isSuspiciousRateRatio(r.prev.rate, r.rate)) continue;
-          if (p.is_wslr && (r.rate < 100 || r.prev.rate < 100)) continue;
-          const delta = (r.rate - r.prev.rate) / r.prev.rate;
-          if (Math.abs(delta) < SIGNIFICANT_DELTA) continue;
-          moves.push({
-            property: p.name, isWslr: p.is_wslr, check_in: d.check_in,
-            prevRate: r.prev.rate, currRate: r.rate, delta,
-          });
-        }
-      }
-      moves.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-      const top = moves.slice(0, 15);
-      if (top.length === 0) {
-        container.innerHTML = '<p class="text-xs text-slate-500 py-3 px-2">No significant per-night moves between the two most recent scrapes (after filtering substitutions and suspicious data).</p>';
-        return;
-      }
-      container.innerHTML = top.map(m => {
-        const sign = m.delta > 0 ? '+' : '';
-        const color = m.delta > 0 ? 'text-rose-700' : 'text-emerald-700';
-        const dot = m.delta > 0 ? '#e11d48' : '#10b981';
-        return `
-          <div class="flex justify-between items-center text-xs py-1.5 px-1 border-b border-slate-200 last:border-0">
-            <div class="min-w-0 pr-2">
-              <div class="font-medium truncate ${m.isWslr ? 'text-emerald-700' : 'text-slate-800'}" title="${escAttr(m.property)}${wslrSuffix(m.property, m.isWslr)}">${escAttr(m.property)}${wslrSuffix(m.property, m.isWslr)}</div>
-              <div class="text-slate-500">${fmtDate(m.check_in)}</div>
-            </div>
-            <div class="text-right whitespace-nowrap">
-              <div class="${color} font-semibold">AU$${Math.round(m.prevRate)} → AU$${Math.round(m.currRate)}</div>
-              <div class="${color}"><span style="display:inline-block;width:6px;height:6px;background:${dot};border-radius:50%;vertical-align:middle;margin-right:3px;"></span>${sign}${(m.delta * 100).toFixed(0)}%</div>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
     function renderTrajectory() {
+      const sel = document.getElementById('trajectoryDate');
       const meta = document.getElementById('trajectoryMeta');
       const empty = document.getElementById('trajectoryEmpty');
       const canvas = document.getElementById('trajectoryChart');
-      if (!canvas) return;
-
-      renderTrajectoryGroupPills();
-
-      const { allDates } = buildDateMap();
-      const mappedProps = activeMappedProperties();
-      if (allDates.length === 0 || mappedProps.length === 0) {
+      if (!sel || !canvas) return;
+      const checkInDate = sel.value;
+      if (!checkInDate) {
         empty.classList.remove('hidden');
-        empty.textContent = 'No data in current selection. Pick a different date range or match group.';
         canvas.style.display = 'none';
         meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
-        document.getElementById('trajectoryMoves').innerHTML = '<p class="text-xs text-slate-500 py-3 px-2">No moves data.</p>';
         return;
       }
-
-      const limitSel = document.getElementById('trajectoryScrapeLimit');
-      const limit = limitSel ? parseInt(limitSel.value, 10) : 10;
-      const data = buildTrajectoryV3(allDates, mappedProps, limit);
-      if (!data) {
+      const data = buildTrajectory(checkInDate);
+      if (!data || Object.keys(data.series).length === 0) {
         empty.classList.remove('hidden');
-        empty.textContent = 'No scrape history yet for this date range and match group.';
         canvas.style.display = 'none';
         meta.textContent = '';
         if (trajectoryChart) { trajectoryChart.destroy(); trajectoryChart = null; }
-        renderTrajectoryMoves(allDates);
         return;
       }
       empty.classList.add('hidden');
       canvas.style.display = '';
-      const shown = data.runIds.length, total = data.totalRuns;
-      meta.textContent = (shown === total)
-        ? `${shown} scrape${shown === 1 ? '' : 's'} · summing ${data.nightsInRange} night${data.nightsInRange === 1 ? '' : 's'} per scrape`
-        : `Showing ${shown} of ${total} scrapes · summing ${data.nightsInRange} night${data.nightsInRange === 1 ? '' : 's'} per scrape`;
+      meta.textContent = `${data.scrapeTimes.length} scrapes captured for ${fmtDate(checkInDate)}`;
 
-      // X axis labels: scrape timestamps
-      const xLabels = data.runIds.map(runId => {
-        const dt = new Date(data.runStamps[runId]);
+      const labels = data.scrapeTimes.map(t => {
+        const dt = new Date(t);
         return dt.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }) + ' ' + dt.toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit', hour12: false });
       });
-
-      // Palette: WSLR emerald + distinct colours for competitors
-      const palette = ['#10b981', '#6366f1', '#f59e0b', '#ef4444', '#0891b2', '#a855f7', '#14b8a6', '#db2777'];
+      const palette = {
+        'WSLR (us)': '#10b981',
+        'Novotel Wollongong': '#6366f1',
+        'Quality Suites Pioneer Sands': '#f59e0b',
+        'Sage Hotel': '#ef4444',
+        'Surfside 22': '#0891b2',
+        'Corrimal Beach Tourist Park': '#a855f7',
+      };
       const wslr = wslrName();
-      const sorted = [...mappedProps].sort((a, b) => {
-        if (a.is_wslr) return -1;
-        if (b.is_wslr) return 1;
-        return a.name.localeCompare(b.name);
+      const propsSorted = Object.keys(data.series).sort((a, b) => {
+        if (a === wslr) return -1;
+        if (b === wslr) return 1;
+        return a.localeCompare(b);
       });
-
-      const datasets = sorted.map((p, i) => ({
-        label: p.name + wslrSuffix(p.name, p.is_wslr),
-        data: data.datasetsByProp[p.name],
-        borderColor: p.is_wslr ? '#10b981' : palette[(i + 1) % palette.length],
-        backgroundColor: 'transparent',
-        tension: 0.25,
-        pointRadius: 3,
-        pointHoverRadius: 6,
-        borderWidth: p.is_wslr ? 3 : 2,
-        spanGaps: false,    // gaps when data missing (per user)
-      }));
-
+      const datasets = propsSorted.map(p => {
+        const series = data.series[p];
+        const pointMap = {};
+        series.forEach(pt => { pointMap[pt.scraped_at] = pt.rate; });
+        return {
+          label: p,
+          data: data.scrapeTimes.map(t => pointMap[t] != null ? pointMap[t] : null),
+          borderColor: palette[p] || '#94a3b8',
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          pointRadius: 3,
+          borderWidth: p === wslr ? 3 : 2,
+          spanGaps: true,
+        };
+      });
       if (trajectoryChart) trajectoryChart.destroy();
       trajectoryChart = new Chart(canvas.getContext('2d'), {
         type: 'line',
-        data: { labels: xLabels, datasets },
+        data: { labels, datasets },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
           interaction: { mode: 'index', intersect: false },
           plugins: {
-            legend: { position: 'bottom', labels: { boxWidth: 14, font: { size: 11 } } },
-            tooltip: {
-              callbacks: {
-                title: items => items.length ? 'Scrape: ' + xLabels[items[0].dataIndex] : '',
-                label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) + ' total' : 'incomplete data'),
-              },
-            },
+            legend: { position: 'bottom' },
+            tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (c.parsed.y != null ? 'AU$' + Math.round(c.parsed.y) : 'sold out / no data') } },
           },
           scales: {
-            y: { beginAtZero: false, title: { display: true, text: `Total cost (AU$ · ${data.nightsInRange}n)` }, ticks: { callback: v => 'AU$' + Math.round(v) } },
-            x: { title: { display: true, text: 'Scrape timestamp' }, ticks: { autoSkip: true, maxRotation: 60, minRotation: 0 } },
+            y: { beginAtZero: false, title: { display: true, text: 'AU$ per night' }, ticks: { callback: v => 'AU$' + v } },
+            x: { title: { display: true, text: 'Scrape timestamp' } },
           },
         },
       });
-
-      renderTrajectoryMoves(allDates);
     }
 
     // ==================================================================
@@ -3038,7 +2414,15 @@
       scrapeProgressTimer = setInterval(pollScrapeProgress, 20000);
     }
 
-    // unit is locked to perNight (Stay total button removed)
+    function setUnit(u) {
+      unit = u;
+      document.getElementById('btnPerNight').className = 'px-4 py-2 rounded-md font-medium text-sm ' + (u === 'perNight' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-300 text-slate-700');
+      document.getElementById('btnTotal').className = 'px-4 py-2 rounded-md font-medium text-sm ' + (u === 'total' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-300 text-slate-700');
+      render();
+    }
+
+    document.getElementById('btnPerNight').addEventListener('click', () => setUnit('perNight'));
+    document.getElementById('btnTotal').addEventListener('click', () => setUnit('total'));
     document.getElementById('heatmapMode').addEventListener('change', () => {
       const { allDates } = buildDateMap();
       renderHeatmap(allDates);
