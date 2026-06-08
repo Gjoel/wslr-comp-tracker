@@ -201,6 +201,7 @@
           <input type="date" id="rangeEnd" class="text-sm border border-slate-300 rounded px-2 py-1">
         </div>
         <div class="flex flex-wrap gap-1">
+          <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('nextWeekend')">Next weekend</button>
           <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next30')">Next 30d</button>
           <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('next90')">Next 90d</button>
           <button class="preset-btn px-3 py-1 rounded text-xs font-medium bg-white border border-slate-300 text-slate-700 hover:bg-slate-100" onclick="setRangePreset('upcoming')">All upcoming</button>
@@ -359,6 +360,19 @@
         <div id="trendsContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
         <h3 class="font-semibold text-sm mt-6 mb-2 text-slate-700">Top single-cell movers (excluding substitutions)</h3>
         <div id="topMoversContainer" class="border border-slate-200 rounded p-3 bg-slate-50"></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-amber-200 mt-8">
+      <div class="px-6 py-4 border-b border-amber-200 bg-amber-50 rounded-t-lg">
+        <div class="flex items-center gap-2">
+          <h2 class="text-lg font-semibold text-amber-900">Data to double-check</h2>
+          <span id="outlierCount" class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 hidden"></span>
+        </div>
+        <p class="text-sm text-amber-800 mt-1">Heuristic flags for rates that look suspicious &mdash; <strong>not confirmed errors</strong>. Booking.com sometimes shows our scraper a higher non-member rate than a real browser sees, so verify these on Booking.com before trusting them. Respects the current match group and date range.</p>
+      </div>
+      <div class="p-6">
+        <div id="outlierContainer"></div>
       </div>
     </div>
 
@@ -589,6 +603,9 @@
     const SUPABASE_ANON_KEY = '__SUPABASE_ANON_KEY__';
     const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMLE-G3N7UgM2QW3RYojpKvh02KA0N9sS371GjuVUHbvBsseGfaJsds9axBdGhmp4w/exec';
     const SIGNIFICANT_DELTA = 0.05;
+    // A row is flagged as a potential outlier if its rate is at least this multiple
+    // of the cheapest comparable property's rate on the same date (1.8 = 80% above).
+    const OUTLIER_MULTIPLE = 1.8;
     const PAGE_SIZE = 1000;
     const MAX_PAGES = 100;
 
@@ -919,7 +936,16 @@
       today.setHours(0, 0, 0, 0);
       let start = new Date(today);
       let end   = new Date(today);
-      if      (preset === 'next30')   { end.setDate(today.getDate() + 30); }
+      if      (preset === 'nextWeekend') {
+        // Item #2: default view = the upcoming weekend. Jump to the next Friday
+        // (today, if today is already Friday) and span Fri -> Sun.
+        const dow = today.getDay();              // 0=Sun ... 5=Fri, 6=Sat
+        const daysUntilFri = (5 - dow + 7) % 7;  // 0 when today is Friday
+        start.setDate(today.getDate() + daysUntilFri);
+        end = new Date(start);
+        end.setDate(start.getDate() + 2);        // Friday + 2 = Sunday
+      }
+      else if (preset === 'next30')   { end.setDate(today.getDate() + 30); }
       else if (preset === 'next90')   { end.setDate(today.getDate() + 90); }
       else if (preset === 'upcoming') { end.setDate(today.getDate() + 365); }
       else if (preset === 'past30')   { start.setDate(today.getDate() - 30); }
@@ -933,10 +959,10 @@
         return;
       }
       if (start > end) {
-        alert('Start date must be before end date.');
-        if (rangeStartDate) document.getElementById('rangeStart').value = fmtYMD(rangeStartDate);
-        if (rangeEndDate) document.getElementById('rangeEnd').value = fmtYMD(rangeEndDate);
-        return;
+        // Item #1: don't error when the start is after the end — silently move
+        // the end date to 2 nights after the start and carry on.
+        end = new Date(start);
+        end.setDate(start.getDate() + 2);
       }
       rangeStartDate = start;
       rangeEndDate = end;
@@ -1407,6 +1433,7 @@
       renderTrends(allDates);
       renderTopMovers(allDates);
       renderTrajectory();
+      renderOutliers(allDates);
     }
 
     function renderCoverageNote(allDates) {
@@ -1487,57 +1514,153 @@
       const mappedProps = activeMappedProperties();
       const headers = ['Date', 'Stay', ...mappedProps.map(p => p.name)];
       const subHeaders = ['', '', ...mappedProps.map(p => roomLabelFor(p.name))];
-      const rows = visible.map(d => {
+
+      const addDaysYMD = (ymd, n) => { const dt = new Date(ymd + 'T00:00:00'); dt.setDate(dt.getDate() + n); return fmtYMD(dt); };
+
+      // How many nights does this date's stay actually require? Driven by scraped
+      // los / min_nights, so it tracks the per-property minimum the scraper probes.
+      function nightsForRec(rec) {
+        if (!rec) return 1;
+        const fromNotes = parseInt((rec.notes || '').match(/nights=(\d+)/)?.[1] || '0', 10);
+        const n = Math.max(rec.los || 0, rec.min_nights || 0, fromNotes || 0);
+        return n > 0 ? n : 1;
+      }
+      function dateMinNights(d) {
+        let n = 1;
+        for (const p of Object.values(d.props)) n = Math.max(n, nightsForRec(p));
+        return n;
+      }
+      const isMinStayDate = (d) => dateMinNights(d) > 1;
+
+      // Ordinary single-night cell — per-night figure (unchanged behaviour).
+      function perNightCell(prop, rec, displayed, d, min, max, validCount) {
+        let cls = 'rate-cell text-right py-2 px-3 align-top';
+        if (displayed != null && validCount > 1) {
+          if (displayed === min) cls += ' cheapest';
+          else if (displayed === max) cls += ' most-expensive';
+        }
+        if (!rec) {
+          const reason = getNoDataReason(prop.name, d.check_in);
+          return `<td class="${cls} no-data-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
+        }
+        if (rec.rate == null) {
+          const reason = explainNoRate(rec);
+          return `<td class="${cls} unavailable-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
+        }
+        let extras = '';
+        if (isSubstitution(rec)) {
+          const prevDisp = displayRate(rec.prev.rate, d.check_in, d.check_out);
+          const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
+          extras += `<div class="substitution" title="Mapped-room change — was ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
+        }
+        const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
+        const roomLine = bookingUrl
+          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
+          : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
+        return `<td class="${cls}">
+          <div class="font-semibold">${fmtAUD(displayed)}</div>
+          ${roomLine}
+          ${extras}
+        </td>`;
+      }
+
+      // Minimum-stay cell — shows the STAY TOTAL (per-night × nights), never a bare per-night number.
+      function totalCell(prop, rec, total, perNight, nights, min, max, validCount) {
+        let cls = 'rate-cell text-right py-2 px-3 align-top min-stay-cell';
+        if (total != null && validCount > 1) {
+          if (total === min) cls += ' cheapest';
+          else if (total === max) cls += ' most-expensive';
+        }
+        if (!rec) {
+          const reason = getNoDataReason(prop.name, '');
+          return `<td class="${cls} no-data-cell"><span class="na">${escAttr(reason)}</span></td>`;
+        }
+        if (rec.rate == null) {
+          const reason = explainNoRate(rec);
+          return `<td class="${cls} unavailable-cell" title="${escAttr(prop.name + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
+        }
+        const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
+        const roomLine = bookingUrl
+          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
+          : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
+        return `<td class="${cls}">
+          <div class="font-semibold">${fmtAUD(total)} <span style="font-size:10px; font-weight:600; color:#64748b;">/ ${nights}n total</span></div>
+          <div style="font-size:10px; color:#94a3b8;">≈ ${fmtAUD(perNight)}/night avg</div>
+          ${roomLine}
+        </td>`;
+      }
+
+      // Group consecutive minimum-stay dates into a single weekend block.
+      const units = [];
+      for (let i = 0; i < visible.length; ) {
+        const d = visible[i];
+        if (!isMinStayDate(d)) { units.push({ kind: 'single', d }); i++; continue; }
+        const group = [d];
+        let j = i + 1;
+        while (j < visible.length && isMinStayDate(visible[j]) &&
+               (new Date(visible[j].check_in) - new Date(group[group.length - 1].check_in)) / 86400000 === 1) {
+          group.push(visible[j]); j++;
+        }
+        units.push({ kind: 'weekend', group });
+        i = j;
+      }
+
+      const rowsHtml = units.map(u => {
+        if (u.kind === 'single') {
+          const d = u.d;
+          const ratesForRow = mappedProps.map(p => {
+            const r = d.props[p.name];
+            return { prop: p, rec: r, displayed: r ? displayRate(r.rate, d.check_in, d.check_out) : null };
+          });
+          const valid = ratesForRow.filter(x => x.displayed != null).map(x => x.displayed);
+          const min = valid.length ? Math.min(...valid) : null;
+          const max = valid.length ? Math.max(...valid) : null;
+          const cells = ratesForRow.map(({ prop, rec, displayed }) => perNightCell(prop, rec, displayed, d, min, max, valid.length)).join('');
+          return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
+            <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
+            <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType || 'midweek'}</td>
+            ${cells}
+          </tr>`;
+        }
+
+        // Weekend / minimum-stay block — one merged row standing in for the grouped dates.
+        const group = u.group;
+        const d0 = group[0];
+        const nightsRep = dateMinNights(d0);
+        const checkoutStr = addDaysYMD(d0.check_in, nightsRep);
         const ratesForRow = mappedProps.map(p => {
-          const r = d.props[p.name];
-          return { prop: p, rec: r, displayed: r ? displayRate(r.rate, d.check_in, d.check_out) : null };
+          const rec = d0.props[p.name];
+          let perNight = null, total = null, nights = nightsRep;
+          if (rec && rec.rate != null) {
+            nights = nightsForRec(rec);
+            perNight = displayRate(rec.rate, rec.check_in, rec.check_out);
+            total = perNight != null ? Math.round(perNight * nights) : null;
+          }
+          return { prop: p, rec, perNight, total, nights };
         });
-        const valid = ratesForRow.filter(x => x.displayed != null).map(x => x.displayed);
-        const min = valid.length ? Math.min(...valid) : null;
-        const max = valid.length ? Math.max(...valid) : null;
-        const cells = ratesForRow.map(({ prop, rec, displayed }) => {
-          let cls = 'rate-cell text-right py-2 px-3 align-top';
-          if (displayed != null && valid.length > 1) {
-            if (displayed === min) cls += ' cheapest';
-            else if (displayed === max) cls += ' most-expensive';
-          }
-          // ---- BUG 7 FIX: no record at all - light grey + label with inferred reason ----
-          if (!rec) {
-            const reason = getNoDataReason(prop.name, d.check_in);
-            return `<td class="${cls} no-data-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
-          }
-          // ---- BUG 7 FIX: rec exists but no rate - show specific reason on grey ----
-          if (rec.rate == null) {
-            const reason = explainNoRate(rec);
-            return `<td class="${cls} unavailable-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
-          }
-          let extras = '';
-          if (isSubstitution(rec)) {
-            const prevDisp = displayRate(rec.prev.rate, d.check_in, d.check_out);
-            const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
-            extras += `<div class="substitution" title="Mapped-room change — was ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
-          }
-          const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
-          const roomLine = bookingUrl
-            ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
-            : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
-          // ---- BUG 8 FIX: show minimum-night restriction badge when applicable ----
-          const minNightsBadge = (rec.min_nights && rec.min_nights > 1)
-            ? `<div class="min-nights-badge" title="Booking.com is enforcing a ${rec.min_nights}-night minimum stay for this date">${rec.min_nights}-night min</div>`
-            : '';
-          return `<td class="${cls}">
-            <div class="font-semibold">${fmtAUD(displayed)}</div>
-            ${roomLine}
-            ${minNightsBadge}
-            ${extras}
+        const validTotals = ratesForRow.filter(x => x.total != null).map(x => x.total);
+        const min = validTotals.length ? Math.min(...validTotals) : null;
+        const max = validTotals.length ? Math.max(...validTotals) : null;
+        const cells = ratesForRow.map(({ prop, rec, perNight, total, nights }) =>
+          totalCell(prop, rec, total, perNight, nights, min, max, validTotals.length)).join('');
+
+        const dateCell = `<td class="py-2 px-3 font-medium align-top" style="background:#f1f5f9;">
+            ${fmtDate(d0.check_in)} – ${fmtDate(checkoutStr)}
+            <div class="text-xs text-slate-500 font-normal" style="margin-top:2px;">Weekend</div>
           </td>`;
-        }).join('');
-        return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
-          <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}${d.nights && d.nights !== '1' ? `<div class="text-xs text-slate-400 font-normal">${d.nights}n</div>` : ''}</td>
-          <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType}</td>
+        const disclaimerCell = `<td class="py-2 px-3 align-top" style="background:#f1f5f9;">
+            <div style="display:inline-flex; align-items:flex-start; gap:6px; background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:6px 8px; max-width:230px;">
+              <span style="color:#b45309; font-size:13px; line-height:1.1;">⚠</span>
+              <span style="font-size:11px; color:#92400e; line-height:1.4;"><span style="font-weight:600;">${nightsRep}-night minimum stay.</span> Prices are the total for the whole stay, not per night — Booking.com won't sell these nights individually.</span>
+            </div>
+          </td>`;
+        return `<tr class="${d0.props[wslr] ? 'wslr-row' : ''} border-t border-slate-200">
+          ${dateCell}
+          ${disclaimerCell}
           ${cells}
         </tr>`;
       }).join('');
+
       t.innerHTML = `
         <thead>
           <tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-slate-200">
@@ -1547,7 +1670,7 @@
             ${subHeaders.map((h, i) => `<th class="py-1 px-3 font-normal ${i >= 2 ? 'text-right' : ''}">${escAttr(h)}</th>`).join('')}
           </tr>
         </thead>
-        <tbody>${rows}</tbody>`;
+        <tbody>${rowsHtml}</tbody>`;
       if (truncated) {
         note.classList.remove('hidden');
         note.textContent = `Showing first ${TABLE_CAP} of ${allDates.length} dates — see the Market view heatmap for the full range.`;
@@ -2570,6 +2693,119 @@
     }
 
     // ==================================================================
+    //  DATA TO DOUBLE-CHECK — heuristic outlier flags
+    //  Two independent signals (a row trips if EITHER fires):
+    //   1) Cross-comparable: rate >= OUTLIER_MULTIPLE x the cheapest OTHER
+    //      mapped property on the same date (catches stale/wrong-rate-plan
+    //      captures like Corrimal's $315 vs a $143 comparable).
+    //   2) Temporal jump: rate is ~2x or ~0.5x its own previous scrape
+    //      (reuses isSuspiciousRateRatio — catches sudden unit-confusion swings).
+    // ==================================================================
+    function renderOutliers(allDates) {
+      const mappedProps = activeMappedProperties();
+      const flags = [];
+
+      for (const d of allDates) {
+        // Displayed (cheapest mapped) rate per property on this date, valid only
+        const cells = mappedProps
+          .map(p => ({ p, rec: d.props[p.name] }))
+          .filter(x => x.rec && x.rec.rate != null);
+        if (cells.length === 0) continue;
+
+        for (const { p, rec } of cells) {
+          const reasons = [];
+
+          // Signal 1: cross-comparable
+          const otherRates = cells.filter(c => c.p.name !== p.name).map(c => c.rec.rate);
+          if (otherRates.length >= 1) {
+            const cheapestOther = Math.min(...otherRates);
+            if (cheapestOther > 0 && rec.rate >= OUTLIER_MULTIPLE * cheapestOther) {
+              const mult = rec.rate / cheapestOther;
+              reasons.push({
+                text: `${mult.toFixed(1)}× the cheapest comparable (AU$${Math.round(cheapestOther)}) on this date`,
+                severity: mult,
+              });
+            }
+          }
+
+          // Signal 2: temporal jump vs previous scrape
+          if (rec.prev && rec.prev.rate != null && isSuspiciousRateRatio(rec.prev.rate, rec.rate)) {
+            const ratio = rec.rate / rec.prev.rate;
+            reasons.push({
+              text: ratio >= 1
+                ? `Roughly doubled vs previous scrape (AU$${Math.round(rec.prev.rate)} → AU$${Math.round(rec.rate)})`
+                : `Roughly halved vs previous scrape (AU$${Math.round(rec.prev.rate)} → AU$${Math.round(rec.rate)})`,
+              severity: ratio >= 1 ? ratio : 1 / ratio,
+            });
+          }
+
+          if (reasons.length > 0) {
+            flags.push({
+              property: p.name,
+              isWslr: p.is_wslr,
+              check_in: d.check_in,
+              check_out: d.check_out,
+              room: rec.room_name,
+              rate: rec.rate,
+              slug: rec.property_slug,
+              reasons,
+              severity: Math.max(...reasons.map(r => r.severity)),
+            });
+          }
+        }
+      }
+
+      flags.sort((a, b) => b.severity - a.severity);
+
+      const container = document.getElementById('outlierContainer');
+      const badge = document.getElementById('outlierCount');
+
+      if (flags.length === 0) {
+        badge.classList.add('hidden');
+        container.innerHTML = '<p class="text-sm text-slate-500 py-3">No suspicious rates detected in this range and match group. ✓</p>';
+        return;
+      }
+
+      badge.textContent = `${flags.length} to check`;
+      badge.classList.remove('hidden');
+
+      const rows = flags.map(f => {
+        const bookingUrl = f.slug
+          ? `https://www.booking.com/hotel/au/${f.slug}.en-gb.html?checkin=${f.check_in}&checkout=${f.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD`
+          : null;
+        const reasonsHtml = f.reasons.map(r => `<div class="text-xs text-amber-800">⚠ ${escAttr(r.text)}</div>`).join('');
+        const verifyLink = bookingUrl
+          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="text-xs text-amber-900 underline hover:text-amber-700 whitespace-nowrap">Verify on Booking.com ↗</a>`
+          : '';
+        return `
+          <tr class="border-t border-amber-100">
+            <td class="py-2 px-3 align-top whitespace-nowrap font-medium">${fmtDate(f.check_in)}</td>
+            <td class="py-2 px-3 align-top">
+              <div class="font-medium ${f.isWslr ? 'text-emerald-700' : ''}">${escAttr(f.property)}${wslrSuffix(f.property, f.isWslr)}</div>
+              <div class="text-xs text-slate-500">${escAttr(f.room || '')}</div>
+            </td>
+            <td class="py-2 px-3 align-top text-right font-semibold text-rose-700 whitespace-nowrap">AU$${Math.round(f.rate)}</td>
+            <td class="py-2 px-3 align-top">${reasonsHtml}</td>
+            <td class="py-2 px-3 align-top text-right">${verifyLink}</td>
+          </tr>`;
+      }).join('');
+
+      container.innerHTML = `
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs uppercase tracking-wide text-slate-500 border-b border-amber-200">
+              <th class="py-2 px-3">Date</th>
+              <th class="py-2 px-3">Property / room</th>
+              <th class="py-2 px-3 text-right">Flagged rate</th>
+              <th class="py-2 px-3">Why flagged</th>
+              <th class="py-2 px-3 text-right">Check</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+    }
+
+    // ==================================================================
     //  EVENTS ADMIN (Phase 8)
     // ==================================================================
     function openEventsModal() {
@@ -2923,7 +3159,7 @@
     });
 
     renderGroupPills();
-    setRangePreset('next30');
+    setRangePreset('nextWeekend');
     startScrapeProgressPolling();
   </script>
 </body>

@@ -280,8 +280,10 @@ async function scrapeOne(browser, property, checkIn, workerId) {
   });
 
   try {
-    let len = 1;            // start by asking for a single night
-    let explicitMin = null; // a number Booking states explicitly, if any
+    const recorded = new Map();   // room_name -> row, kept at the SHORTEST length it appears
+    let explicitMin = null;       // a minimum Booking states in words, if any
+    let lastSource = '';
+    let len = 1;                  // start by asking for a single night
 
     while (len <= PROBE_MAX) {
       const checkOut = addDays(checkIn, len);
@@ -325,56 +327,57 @@ async function scrapeOne(browser, property, checkIn, workerId) {
       }
 
       const { rooms, source } = await getRoomRates(page, len);
+      lastSource = source;
 
-      // SUCCESS: rooms found at this length → this is the effective minimum.
-      if (rooms.length > 0) {
-        const minNights = len;               // ascending probe stops at first bookable length
-        const cheapest  = Math.min(...rooms.map(r => r.rate));
-        const badges    = rooms.filter(r => r.roomsLeft != null).length;
-        console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${minNights}n min  ${rooms.length}rm  cheapest AU$${cheapest.toFixed(0)}/n (total AU$${(cheapest * minNights).toFixed(0)})${badges ? `  (${badges} low-stock)` : ''}`);
-        return rooms.map(r => ({
-          ...base,
-          room_name: r.roomName,
-          rate: r.rate,                       // per night (Booking's averaged per-night for the stay)
-          available: true,
-          min_nights: minNights,              // 1 == bookable as a single night; >1 == real minimum
-          rooms_left: r.roomsLeft,
-          notes: `stay_type=${stayType}; nights=${minNights}; min_nights=${minNights}; source=hprt-table; probe`,
-        }));
+      // Record any NEW room at this length. Because we probe shortest-first, the
+      // first time we see a room is at its own minimum stay — so min_nights and the
+      // per-night rate are correct per room, even when rooms have different minimums.
+      for (const r of rooms) {
+        if (!recorded.has(r.roomName)) {
+          recorded.set(r.roomName, {
+            ...base,
+            room_name: r.roomName,
+            rate: r.rate,                 // per night (Booking's averaged per-night for the stay)
+            available: true,
+            min_nights: len,              // 1 == bookable as a single night; >1 == this room's real minimum
+            rooms_left: r.roomsLeft,
+            notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; source=hprt-table; probe`,
+          });
+        }
       }
 
-      // No structured rooms. If the page clearly has a price and isn't sold out,
-      // keep the body-text fallback (extraction failed but it IS available at this length).
-      if (!isSoldOut && !notAvailable) {
+      // Body-text fallback only if we've found nothing structured anywhere yet.
+      if (rooms.length === 0 && recorded.size === 0 && !isSoldOut && !notAvailable) {
         let lowest = perNightFromText(bodyText);
         if (lowest == null) {
           const prices = pricesFromText(bodyText).filter(n => n >= 150);
           if (prices.length) lowest = Math.min(...prices) / len;
         }
         if (lowest != null) {
-          console.log(`${tag} ⚠ FALLBACK      ${property.name}  ${checkIn} (${len}n)  AU$${lowest.toFixed(0)}/n`);
-          return [{ ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: len, notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; fallback to body-text lowest; source=${source}` }];
+          recorded.set('(unknown)', { ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: len, notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; fallback to body-text lowest; source=${source}` });
         }
       }
 
-      // Nothing bookable at this length. Decide whether to probe a longer stay.
-      // Weekend check-ins (Fri/Sat/Sun) escalate even without an explicit message,
-      // because Booking often just shows "sold out" for an under-minimum weekend stay.
+      // Decide whether to probe a longer stay.
       const minStayHint = !!explicitMin || MIN_STAY_HINT_RE.test(bodyText) || stayType === 'weekend';
-
-      if (explicitMin && explicitMin > len) { len = explicitMin; continue; } // jump straight to the stated minimum
-      if (minStayHint && len < PROBE_MAX)   { len += 1; continue; }           // shorter stay rejected — try one night longer
-
-      // Genuinely unavailable: sold out, or no min-stay signal to chase.
-      const label = explicitMin ? `(min ${explicitMin} nights required)` : '(sold out)';
-      console.log(`${tag} • ${explicitMin ? `MIN ${explicitMin} NIGHTS` : 'SOLD OUT'}  ${property.name}  ${checkIn} (probed up to ${len}n)`);
-      return [{ ...base, room_name: label, rate: null, available: false, min_nights: explicitMin || null, notes: `stay_type=${stayType}; nights=${len}; no availability; min=${explicitMin || '?'}; source=${source}` }];
+      if (explicitMin && explicitMin > len) { len = explicitMin; continue; }              // jump to a stated minimum
+      if (len === 1 && stayType === 'weekend' && len < PROBE_MAX) { len = 2; continue; }   // weekend: also check 2 nights for rooms with a 2-night minimum, even if a 1-night room was found
+      if (recorded.size === 0 && minStayHint && len < PROBE_MAX) { len += 1; continue; }   // still nothing — keep looking
+      break;                                                                               // captured what's available
     }
 
-    // Exhausted PROBE_MAX without ever finding rooms.
-    const checkOut = addDays(checkIn, PROBE_MAX);
-    console.log(`${tag} • UNAVAILABLE    ${property.name}  ${checkIn} (probed 1–${PROBE_MAX}n, min=${explicitMin || '?'})`);
-    return [{ ...baseFor(checkOut), room_name: explicitMin ? `(min ${explicitMin} nights required)` : '(sold out)', rate: null, available: false, min_nights: explicitMin || null, notes: `stay_type=${stayType}; nights=${PROBE_MAX}; probe exhausted; min=${explicitMin || '?'}` }];
+    if (recorded.size === 0) {
+      const checkOut = addDays(checkIn, Math.min(len, PROBE_MAX));
+      console.log(`${tag} • ${explicitMin ? `MIN ${explicitMin} NIGHTS` : 'SOLD OUT'}  ${property.name}  ${checkIn}`);
+      return [{ ...baseFor(checkOut), room_name: explicitMin ? `(min ${explicitMin} nights required)` : '(sold out)', rate: null, available: false, min_nights: explicitMin || null, notes: `stay_type=${stayType}; no availability; min=${explicitMin || '?'}; source=${lastSource}` }];
+    }
+
+    const rows = [...recorded.values()];
+    const priced = rows.filter(r => r.rate != null);
+    const cheapest = priced.length ? Math.min(...priced.map(r => r.rate)) : null;
+    const minsSeen = [...new Set(rows.map(r => r.min_nights))].sort().join('/');
+    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${rows.length}rm  min-nights ${minsSeen}  cheapest ${cheapest != null ? 'AU$' + cheapest.toFixed(0) + '/n' : 'n/a'}`);
+    return rows;
   } catch (err) {
     console.log(`${tag} ✗ ERROR         ${property.name} ${checkIn}: ${err.message}`);
     return [];
