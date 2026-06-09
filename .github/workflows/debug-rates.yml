@@ -1,0 +1,53 @@
+name: Debug rates (inspect rate plans for one URL)
+
+# Manual-only. Actions tab → "Debug rates (inspect rate plans for one URL)" →
+# "Run workflow" → paste a full Booking.com URL (a "Verify on Booking.com ↗"
+# link from the dashboard works perfectly). Then read the log and download the
+# "debug-rates-output" artifact (screenshots + room-table HTML + JSON dump).
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Full Booking.com URL to inspect (e.g. a Verify link from the dashboard)"
+        required: true
+      one_night:
+        description: "Also re-check the same date at 1 night (reveals min-stay rooms)?"
+        type: boolean
+        default: true
+
+jobs:
+  debug-rates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install Playwright Chromium
+        run: |
+          npm install playwright
+          npx playwright install --with-deps chromium
+
+      - name: Run rate-plan diagnostic
+        env:
+          DEBUG_URL: ${{ github.event.inputs.url }}
+          DEBUG_ONE_NIGHT: ${{ github.event.inputs.one_night == 'false' && '0' || '1' }}
+        run: node debug-rates.js
+
+      - name: Upload screenshots + HTML + JSON
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: debug-rates-output
+          path: |
+            debug-rates-*.png
+            debug-rates-*.html
+            dump-debug-rates.json
+          if-no-files-found: warn
+          retention-days: 7
