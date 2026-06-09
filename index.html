@@ -1515,30 +1515,49 @@
       const headers = ['Date', 'Stay', ...mappedProps.map(p => p.name)];
       const subHeaders = ['', '', ...mappedProps.map(p => roomLabelFor(p.name))];
 
-      const addDaysYMD = (ymd, n) => { const dt = new Date(ymd + 'T00:00:00'); dt.setDate(dt.getDate() + n); return fmtYMD(dt); };
-
-      // How many nights does this date's stay actually require? Driven by scraped
-      // los / min_nights, so it tracks the per-property minimum the scraper probes.
+      // How many nights this property's booking on this date actually requires
+      // (driven by scraped los / min_nights, so it tracks the real per-property minimum).
       function nightsForRec(rec) {
         if (!rec) return 1;
         const fromNotes = parseInt((rec.notes || '').match(/nights=(\d+)/)?.[1] || '0', 10);
         const n = Math.max(rec.los || 0, rec.min_nights || 0, fromNotes || 0);
         return n > 0 ? n : 1;
       }
-      function dateMinNights(d) {
-        let n = 1;
-        for (const p of Object.values(d.props)) n = Math.max(n, nightsForRec(p));
-        return n;
-      }
-      const isMinStayDate = (d) => dateMinNights(d) > 1;
+      const consecutive = (a, b) => (new Date(b) - new Date(a)) / 86400000 === 1;
 
-      // Ordinary single-night cell — per-night figure (unchanged behaviour).
-      function perNightCell(prop, rec, displayed, d, min, max, validCount) {
-        let cls = 'rate-cell text-right py-2 px-3 align-top';
-        if (displayed != null && validCount > 1) {
-          if (displayed === min) cls += ' cheapest';
-          else if (displayed === max) cls += ' most-expensive';
+      // Per-COLUMN merge directives. Dates always stay as separate rows; within each
+      // property column a minimum-stay booking merges (rowspan) across the nights it
+      // covers, while a property that sells single nights keeps a cell on every row.
+      const colDir = mappedProps.map(() => new Array(visible.length).fill(null));
+      mappedProps.forEach((p, pi) => {
+        let i = 0;
+        while (i < visible.length) {
+          const rec = visible[i].props[p.name];
+          const nights = nightsForRec(rec);
+          if (rec && rec.rate != null && nights > 1) {
+            let span = 1;
+            while (span < nights && i + span < visible.length && consecutive(visible[i + span - 1].check_in, visible[i + span].check_in)) span++;
+            colDir[pi][i] = { kind: 'merge', rec, span };
+            for (let k = 1; k < span; k++) colDir[pi][i + k] = { kind: 'covered' };
+            i += span;
+          } else {
+            colDir[pi][i] = { kind: 'single', rec };
+            i += 1;
+          }
         }
+      });
+
+      const bookingLink = (rec) => {
+        const url = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
+        return url
+          ? `<a href="${url}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
+          : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
+      };
+
+      // Ordinary single-night cell — per-night figure.
+      function perNightCell(prop, rec, d, displayed, isMin, isMax) {
+        let cls = 'rate-cell text-right py-2 px-3 align-top';
+        if (isMin) cls += ' cheapest'; else if (isMax) cls += ' most-expensive';
         if (!rec) {
           const reason = getNoDataReason(prop.name, d.check_in);
           return `<td class="${cls} no-data-cell" title="${escAttr(prop.name + ' on ' + fmtDate(d.check_in) + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
@@ -1553,110 +1572,56 @@
           const prevRoomShort = rec.prev.room_name && rec.prev.room_name.length > 26 ? rec.prev.room_name.slice(0, 26) + '…' : (rec.prev.room_name || '');
           extras += `<div class="substitution" title="Mapped-room change — was ${escAttr(rec.prev.room_name || '')} at ${escAttr(fmtAUD(prevDisp))}">⚠ was ${fmtAUD(prevDisp)} (${escAttr(prevRoomShort)})</div>`;
         }
-        const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
-        const roomLine = bookingUrl
-          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
-          : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
         return `<td class="${cls}">
           <div class="font-semibold">${fmtAUD(displayed)}</div>
-          ${roomLine}
+          ${bookingLink(rec)}
           ${extras}
         </td>`;
       }
 
-      // Minimum-stay cell — shows the STAY TOTAL (per-night × nights), never a bare per-night number.
-      function totalCell(prop, rec, total, perNight, nights, min, max, validCount) {
-        let cls = 'rate-cell text-right py-2 px-3 align-top min-stay-cell';
-        if (total != null && validCount > 1) {
-          if (total === min) cls += ' cheapest';
-          else if (total === max) cls += ' most-expensive';
-        }
-        if (!rec) {
-          const reason = getNoDataReason(prop.name, '');
-          return `<td class="${cls} no-data-cell"><span class="na">${escAttr(reason)}</span></td>`;
-        }
-        if (rec.rate == null) {
-          const reason = explainNoRate(rec);
-          return `<td class="${cls} unavailable-cell" title="${escAttr(prop.name + ': ' + reason)}"><span class="na">${escAttr(reason)}</span></td>`;
-        }
-        const bookingUrl = rec.property_slug ? `https://www.booking.com/hotel/au/${rec.property_slug}.en-gb.html?checkin=${rec.check_in}&checkout=${rec.check_out}&group_adults=2&group_children=0&no_rooms=1&selected_currency=AUD` : null;
-        const roomLine = bookingUrl
-          ? `<a href="${bookingUrl}" target="_blank" rel="noopener" class="room hover:underline hover:text-slate-900" title="Open this date on Booking.com to verify · ${escAttr(rec.room_name)}">${escAttr(rec.room_name)} <span style="font-size:9px; color: #94a3b8;">↗</span></a>`
-          : `<div class="room" title="${escAttr(rec.room_name)}">${escAttr(rec.room_name)}</div>`;
-        return `<td class="${cls}">
-          <div class="font-semibold">${fmtAUD(total)} <span style="font-size:10px; font-weight:600; color:#64748b;">/ ${nights}n total</span></div>
+      // Minimum-stay cell — merged across `span` rows (Excel-style), shows the STAY
+      // TOTAL with a clear "N-night minimum" tag and the per-night average beneath.
+      function mergedCell(prop, rec, span, isMin, isMax) {
+        const nights = nightsForRec(rec);
+        const perNight = displayRate(rec.rate, rec.check_in, rec.check_out);
+        const total = perNight != null ? Math.round(perNight * nights) : null;
+        let cls = 'rate-cell text-right px-3 py-2 min-stay-cell';
+        if (isMin) cls += ' cheapest'; else if (isMax) cls += ' most-expensive';
+        return `<td class="${cls}" rowspan="${span}" style="vertical-align:middle; border-left:2px solid #cbd5e1; border-right:2px solid #cbd5e1;">
+          <div style="font-size:10px; font-weight:600; color:#b45309; letter-spacing:0.03em; text-transform:uppercase; margin-bottom:3px;">⚠ ${nights}-night minimum</div>
+          <div class="font-semibold" style="font-size:15px;">${fmtAUD(total)} <span style="font-size:10px; font-weight:600; color:#64748b;">/ ${nights}n total</span></div>
           <div style="font-size:10px; color:#94a3b8;">≈ ${fmtAUD(perNight)}/night avg</div>
-          ${roomLine}
+          ${bookingLink(rec)}
         </td>`;
       }
 
-      // Group consecutive minimum-stay dates into a single weekend block.
-      const units = [];
-      for (let i = 0; i < visible.length; ) {
-        const d = visible[i];
-        if (!isMinStayDate(d)) { units.push({ kind: 'single', d }); i++; continue; }
-        const group = [d];
-        let j = i + 1;
-        while (j < visible.length && isMinStayDate(visible[j]) &&
-               (new Date(visible[j].check_in) - new Date(group[group.length - 1].check_in)) / 86400000 === 1) {
-          group.push(visible[j]); j++;
-        }
-        units.push({ kind: 'weekend', group });
-        i = j;
-      }
-
-      const rowsHtml = units.map(u => {
-        if (u.kind === 'single') {
-          const d = u.d;
-          const ratesForRow = mappedProps.map(p => {
-            const r = d.props[p.name];
-            return { prop: p, rec: r, displayed: r ? displayRate(r.rate, d.check_in, d.check_out) : null };
-          });
-          const valid = ratesForRow.filter(x => x.displayed != null).map(x => x.displayed);
-          const min = valid.length ? Math.min(...valid) : null;
-          const max = valid.length ? Math.max(...valid) : null;
-          const cells = ratesForRow.map(({ prop, rec, displayed }) => perNightCell(prop, rec, displayed, d, min, max, valid.length)).join('');
-          return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
-            <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
-            <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType || 'midweek'}</td>
-            ${cells}
-          </tr>`;
-        }
-
-        // Weekend / minimum-stay block — one merged row standing in for the grouped dates.
-        const group = u.group;
-        const d0 = group[0];
-        const nightsRep = dateMinNights(d0);
-        const checkoutStr = addDaysYMD(d0.check_in, nightsRep);
-        const ratesForRow = mappedProps.map(p => {
-          const rec = d0.props[p.name];
-          let perNight = null, total = null, nights = nightsRep;
-          if (rec && rec.rate != null) {
-            nights = nightsForRec(rec);
-            perNight = displayRate(rec.rate, rec.check_in, rec.check_out);
-            total = perNight != null ? Math.round(perNight * nights) : null;
+      const rowsHtml = visible.map((d, i) => {
+        // Per-night values of the cells that START in this row (for cheapest/dearest highlight).
+        const present = [];
+        mappedProps.forEach((p, pi) => {
+          const dir = colDir[pi][i];
+          if (dir && dir.kind !== 'covered' && dir.rec && dir.rec.rate != null) {
+            const pn = displayRate(dir.rec.rate, dir.rec.check_in, dir.rec.check_out);
+            if (pn != null) present.push(pn);
           }
-          return { prop: p, rec, perNight, total, nights };
         });
-        const validTotals = ratesForRow.filter(x => x.total != null).map(x => x.total);
-        const min = validTotals.length ? Math.min(...validTotals) : null;
-        const max = validTotals.length ? Math.max(...validTotals) : null;
-        const cells = ratesForRow.map(({ prop, rec, perNight, total, nights }) =>
-          totalCell(prop, rec, total, perNight, nights, min, max, validTotals.length)).join('');
+        const minPN = present.length ? Math.min(...present) : null;
+        const maxPN = present.length ? Math.max(...present) : null;
+        const flagMin = (pn) => present.length > 1 && pn != null && pn === minPN;
+        const flagMax = (pn) => present.length > 1 && pn != null && pn === maxPN;
 
-        const dateCell = `<td class="py-2 px-3 font-medium align-top" style="background:#f1f5f9;">
-            ${fmtDate(d0.check_in)} – ${fmtDate(checkoutStr)}
-            <div class="text-xs text-slate-500 font-normal" style="margin-top:2px;">Weekend</div>
-          </td>`;
-        const disclaimerCell = `<td class="py-2 px-3 align-top" style="background:#f1f5f9;">
-            <div style="display:inline-flex; align-items:flex-start; gap:6px; background:#fffbeb; border:1px solid #fcd34d; border-radius:6px; padding:6px 8px; max-width:230px;">
-              <span style="color:#b45309; font-size:13px; line-height:1.1;">⚠</span>
-              <span style="font-size:11px; color:#92400e; line-height:1.4;"><span style="font-weight:600;">${nightsRep}-night minimum stay.</span> Prices are the total for the whole stay, not per night — Booking.com won't sell these nights individually.</span>
-            </div>
-          </td>`;
-        return `<tr class="${d0.props[wslr] ? 'wslr-row' : ''} border-t border-slate-200">
-          ${dateCell}
-          ${disclaimerCell}
+        const cells = mappedProps.map((p, pi) => {
+          const dir = colDir[pi][i];
+          if (!dir || dir.kind === 'covered') return '';   // covered by a rowspan from a row above
+          const rec = dir.rec;
+          const pn = rec && rec.rate != null ? displayRate(rec.rate, rec.check_in, rec.check_out) : null;
+          if (dir.kind === 'merge') return mergedCell(p, rec, dir.span, flagMin(pn), flagMax(pn));
+          return perNightCell(p, rec, d, pn, flagMin(pn), flagMax(pn));
+        }).join('');
+
+        return `<tr class="${d.props[wslr] ? 'wslr-row' : ''} border-t border-slate-100">
+          <td class="py-2 px-3 font-medium align-top">${fmtDate(d.check_in)}</td>
+          <td class="py-2 px-3 text-slate-500 capitalize align-top">${d.stayType || 'midweek'}</td>
           ${cells}
         </tr>`;
       }).join('');
