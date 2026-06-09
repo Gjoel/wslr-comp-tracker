@@ -165,6 +165,28 @@ function pricesFromText(text) {
   return out;
 }
 
+// Booking shows AU accommodation prices EXCLUDING 10% GST to overseas IPs (the
+// GitHub runner is one), labelling it e.g. "Excluded: 10% VAT". Australian
+// visitors see the GST-inclusive price ("Includes taxes and charges"). To match
+// what a real AU guest pays, we detect that excluded-tax percentage and add it
+// back. This only fires when the page explicitly says tax is excluded — so on an
+// AU IP (or any "taxes included" page) it returns 0 and nothing is double-added.
+function detectExcludedTaxRate(text) {
+  const patterns = [
+    /exclud\w*[^%\d]{0,24}(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)/i, // "Excluded: 10% VAT"
+    /(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)[^%]{0,24}(?:not\s+included|exclud\w*)/i, // "10% VAT not included"
+    /\+\s*(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)/i, // "+10% tax"
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) {
+      const pct = parseFloat(m[1]);
+      if (pct > 0 && pct <= 30) return pct / 100;
+    }
+  }
+  return 0;
+}
+
 // "Only 2 left at this price!", "Only 1 left on our site", "We have 5 left"
 function extractRoomsLeft(text) {
   if (!text) return null;
@@ -282,6 +304,7 @@ async function scrapeOne(browser, property, checkIn, workerId) {
   try {
     const recorded = new Map();   // room_name -> row, kept at the SHORTEST length it appears
     let explicitMin = null;       // a minimum Booking states in words, if any
+    let taxAddedPct = 0;          // GST % we added back, if Booking served tax-exclusive prices
     let lastSource = '';
     let len = 1;                  // start by asking for a single night
 
@@ -329,6 +352,13 @@ async function scrapeOne(browser, property, checkIn, workerId) {
       const { rooms, source } = await getRoomRates(page, len);
       lastSource = source;
 
+      // GST add-back: if Booking is showing tax-exclusive prices (overseas IP),
+      // reconstruct the AU GST-inclusive price a local guest would actually see.
+      const taxRate = detectExcludedTaxRate(bodyText);
+      const withTax = (n) => (n != null && taxRate > 0) ? Math.round(n * (1 + taxRate)) : n;
+      const taxNote = taxRate > 0 ? `; tax_added=${Math.round(taxRate * 100)}%` : '';
+      if (taxRate > 0) taxAddedPct = Math.round(taxRate * 100);
+
       // Record any NEW room at this length. Because we probe shortest-first, the
       // first time we see a room is at its own minimum stay — so min_nights and the
       // per-night rate are correct per room, even when rooms have different minimums.
@@ -337,11 +367,11 @@ async function scrapeOne(browser, property, checkIn, workerId) {
           recorded.set(r.roomName, {
             ...base,
             room_name: r.roomName,
-            rate: r.rate,                 // per night (Booking's averaged per-night for the stay)
+            rate: withTax(r.rate),        // per night, GST-inclusive when Booking served us a tax-exclusive page
             available: true,
             min_nights: len,              // 1 == bookable as a single night; >1 == this room's real minimum
             rooms_left: r.roomsLeft,
-            notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; source=hprt-table; probe`,
+            notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; source=hprt-table; probe${taxNote}`,
           });
         }
       }
@@ -354,7 +384,7 @@ async function scrapeOne(browser, property, checkIn, workerId) {
           if (prices.length) lowest = Math.min(...prices) / len;
         }
         if (lowest != null) {
-          recorded.set('(unknown)', { ...base, room_name: '(unknown)', rate: lowest, available: true, min_nights: len, notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; fallback to body-text lowest; source=${source}` });
+          recorded.set('(unknown)', { ...base, room_name: '(unknown)', rate: withTax(lowest), available: true, min_nights: len, notes: `stay_type=${stayType}; nights=${len}; min_nights=${len}; fallback to body-text lowest; source=${source}${taxNote}` });
         }
       }
 
@@ -376,7 +406,7 @@ async function scrapeOne(browser, property, checkIn, workerId) {
     const priced = rows.filter(r => r.rate != null);
     const cheapest = priced.length ? Math.min(...priced.map(r => r.rate)) : null;
     const minsSeen = [...new Set(rows.map(r => r.min_nights))].sort().join('/');
-    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${rows.length}rm  min-nights ${minsSeen}  cheapest ${cheapest != null ? 'AU$' + cheapest.toFixed(0) + '/n' : 'n/a'}`);
+    console.log(`${tag} ✓ ${property.name.padEnd(36)} ${checkIn} ${stayType.padEnd(7)} ${rows.length}rm  min-nights ${minsSeen}  cheapest ${cheapest != null ? 'AU$' + cheapest.toFixed(0) + '/n' : 'n/a'}${taxAddedPct ? `  (+${taxAddedPct}% GST added)` : ''}`);
     return rows;
   } catch (err) {
     console.log(`${tag} ✗ ERROR         ${property.name} ${checkIn}: ${err.message}`);

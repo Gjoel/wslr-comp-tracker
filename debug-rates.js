@@ -80,6 +80,21 @@ function pricesFromText(text) {
   return out;
 }
 
+// Copied verbatim from scrape.js (Option B): detect an EXCLUDED percentage tax
+// so we can show the GST-inclusive price a local AU guest would actually see.
+function detectExcludedTaxRate(text) {
+  const patterns = [
+    /exclud\w*[^%\d]{0,24}(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)/i,
+    /(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)[^%]{0,24}(?:not\s+included|exclud\w*)/i,
+    /\+\s*(\d{1,2}(?:\.\d+)?)\s*%\s*(?:vat|gst|sales\s*tax|tax)/i,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) { const pct = parseFloat(m[1]); if (pct > 0 && pct <= 30) return pct / 100; }
+  }
+  return 0;
+}
+
 function extractRoomsLeft(text) {
   if (!text) return null;
   const patterns = [
@@ -233,8 +248,10 @@ async function inspect(page, label, slug, checkIn, checkOut, nights) {
   const minStay = (body.match(/you need to stay (\d+)\+? nights?/i) || body.match(/minimum (?:stay|length of stay)[^\d]{0,24}(\d+)/i) || body.match(/(\d+)\s*[- ]?night minimum/i));
   const soldOut = /sold out|no rooms available/i.test(body);
   const geniusOnPage = /genius/i.test(body);
+  const taxRate = detectExcludedTaxRate(body);
 
   console.log(`Page signals → currency shows AUD: ${currencyAUD} | sold out: ${soldOut} | min-stay msg: ${minStay ? minStay[1] + ' nights' : 'none'} | "Genius" anywhere on page: ${geniusOnPage}`);
+  console.log(`Tax → excluded tax detected: ${taxRate > 0 ? Math.round(taxRate * 100) + '% (Option B would add this back)' : 'none (page looks tax-inclusive — nothing added)'}`);
 
   // Locate the table and rate-plan rows exactly as production does.
   let table = null;
@@ -291,7 +308,9 @@ async function inspect(page, label, slug, checkIn, checkOut, nights) {
     console.log(`     no rooms (source=${prod.source})`);
   } else {
     for (const r of prod.rooms) {
-      console.log(`     • ${r.roomName}  →  stored rate AU$${Math.round(r.rate)}/n (total AU$${Math.round(r.rate * nights)})${r.roomsLeft != null ? `  · ${r.roomsLeft} left` : ''}`);
+      const inc = taxRate > 0 ? Math.round(r.rate * (1 + taxRate)) : Math.round(r.rate);
+      const incNote = taxRate > 0 ? `  →  with +${Math.round(taxRate * 100)}% GST: AU$${inc}/n (total AU$${inc * nights})` : '';
+      console.log(`     • ${r.roomName}  →  raw AU$${Math.round(r.rate)}/n (total AU$${Math.round(r.rate * nights)})${r.roomsLeft != null ? `  · ${r.roomsLeft} left` : ''}${incNote}`);
     }
   }
   console.log(`  cheapest price anywhere on page (≥50): ${cheapestVisible != null ? 'AU$' + cheapestVisible : 'none'}  ·  ÷${nights} = ${cheapestVisible != null ? 'AU$' + Math.round(cheapestVisible / nights) + '/n' : '—'}`);
