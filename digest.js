@@ -1,4 +1,4 @@
-// digest.js (v2)
+// digest.js (v2.1)
 // Compares the two most recent scrape runs and emails a daily digest of
 // big price and volume movement via the Apps Script webhook.
 //
@@ -8,6 +8,9 @@
 //   2. Availability  dates that flipped sold out or came back on sale
 //   3. Volume        net movement in "only X rooms left" counts (rooms sold vs
 //                    released, matched room for room) plus available-date counts
+//
+// All comparisons cover only dates present in BOTH runs, so a short on-demand
+// scrape compared against a full nightly run stays honest.
 //
 // Env vars (all optional except the first two):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   required
@@ -192,9 +195,16 @@ function compare(prev, curr) {
     const avgP = n ? sumP / n : null;
     const avgPct = n ? ((avgC - avgP) / avgP) * 100 : null;
 
-    let availC = 0, totalC = 0, availP = 0;
-    for (const [k, v] of curr.anyAvail) if (k.startsWith(pre)) { totalC++; if (v) availC++; }
-    for (const [k, v] of prev.anyAvail) if (k.startsWith(pre) && v) availP++;
+    // Availability compared over matched dates only, so a partial on-demand
+    // run against a full nightly run does not produce phantom swings
+    let availC = 0, availP = 0, matchedDates = 0;
+    for (const [k, v] of curr.anyAvail) {
+      if (!k.startsWith(pre)) continue;
+      if (!prev.anyAvail.has(k)) continue;
+      matchedDates++;
+      if (v) availC++;
+      if (prev.anyAvail.get(k)) availP++;
+    }
 
     let sold = 0, released = 0, matchedRooms = 0;
     for (const [k, cl] of curr.roomsLeft) {
@@ -206,7 +216,7 @@ function compare(prev, curr) {
       else if (cl > pl) released += cl - pl;
     }
 
-    stats.push({ name, avgC, avgP, avgPct, nDates: n, availC, availP, totalC, sold, released, matchedRooms });
+    stats.push({ name, avgC, avgP, avgPct, nDates: n, availC, availP, matchedDates, sold, released, matchedRooms });
   }
 
   return { priceMoves, soldOut, backOn, stats };
@@ -226,7 +236,7 @@ function renderEmail(runs, res) {
       <td ${TD}><b>${esc(p.name)}</b></td>
       <td ${TD}>${p.avgC != null ? money(p.avgC) : '<span style="color:#888">n/a</span>'}</td>
       <td ${TD}>${pctSpan(p.avgPct)}</td>
-      <td ${TD}>${p.availC} / ${p.totalC} (${deltaSpan(p.availC - p.availP)})</td>
+      <td ${TD}>${p.availC} / ${p.matchedDates} (${deltaSpan(p.availC - p.availP)})</td>
       <td ${TD}>${p.sold ? `<b>${p.sold}</b>` : '0'}${p.released ? ` / +${p.released}` : ''}</td>
     </tr>`).join('');
 
@@ -291,7 +301,7 @@ function renderEmail(runs, res) {
         <tr><th ${TH}>Property</th><th ${TH}>Avg rate</th><th ${TH}>Move</th><th ${TH}>Dates available</th><th ${TH}>Rooms sold / released*</th></tr>
         ${summaryRows}
       </table>
-      <p style="font-size:11px;color:#888;margin:6px 0 0">* From Booking.com "only X rooms left" counts, matched room for room between runs. Scarce inventory only, so it understates true volume.</p>`)}
+      <p style="font-size:11px;color:#888;margin:6px 0 0">* From Booking.com "only X rooms left" counts, matched room for room between runs. Scarce inventory only, so it understates true volume. All columns compare only dates covered by both runs, so short on-demand scrapes show small totals.</p>`)}
 
       ${section(`Big price moves (&#8805;${MIN_PCT_MOVE}% and &#8805;${money(MIN_ABS_MOVE)})`, priceTable)}
 
