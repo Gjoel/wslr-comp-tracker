@@ -149,16 +149,41 @@ function perNightFromText(text) {
   return vals.length ? Math.min(...vals) : null;
 }
 
-// FALLBACK extractor: every in-range price in the text, no filtering.
-// Used only when no explicit "per night" figure is present. The genuine
-// single-night rate is the smallest real number in a room row — struck-through
-// originals are higher, multi-room "select N rooms" totals are higher, and
-// taxes/fees fall below the 50 floor — so callers take the minimum.
+// Remove any dollar amount attached to tax/charge/fee wording so it can never be
+// mistaken for a room price. Booking renders these as "+AU$58 taxes and charges",
+// "Includes AU$63 in taxes and charges" or "Excluded: AU$58 VAT" depending on
+// region. On 1-night scrapes those amounts sat safely below the $50 floor, but on
+// the 2-3 night min-stay probes the stay's tax total clears $50 and, being the
+// smallest number in the row, was captured as the stay total — then GST-added and
+// divided per night, storing ~$30 junk rates on weekend dates (the +990% / -91%
+// "big price moves" in the digest). All matching is same-line only, so a real
+// price sitting on the line after e.g. "breakfast included" is never eaten.
+function stripTaxAmounts(text) {
+  const money   = '(?:AUD|AU\\$|A\\$|\\$)[^\\S\\n]*\\d[\\d,]*(?:\\.\\d{1,2})?';
+  const gap     = '[^\\n]{0,40}?';
+  const taxWord = '(?:taxes?|vat|gst|charges?|fees?)';
+  return String(text)
+    // "+AU$58 taxes and charges" / "+ AU$58 in taxes and fees"
+    .replace(new RegExp('\\+[^\\S\\n]*' + money + gap + taxWord + '[^\\n]*', 'gi'), ' ')
+    // "Includes AU$63 in taxes and charges" / "Excluded: AU$58 VAT"
+    .replace(new RegExp('(?:in|ex)clud(?:es?|ed):?[^\\S\\n]*' + money + gap + taxWord + '[^\\n]*', 'gi'), ' ')
+    // "AU$58 taxes and charges" with no lead-in
+    .replace(new RegExp(money + '[^\\S\\n]*(?:in[^\\S\\n]+)?' + taxWord + '(?:[^\\S\\n]+(?:and|&)[^\\S\\n]+' + taxWord + ')?', 'gi'), ' ');
+}
+
+// FALLBACK extractor: every in-range price in the text, with tax amounts stripped
+// out first. Used only when no explicit "per night" figure is present. The genuine
+// rate is the smallest real number in a room row — struck-through originals are
+// higher and multi-room "select N rooms" totals are higher — so callers take the
+// minimum. Callers should also scale the $50 floor by nights (see getRoomRates):
+// it's a per-night plausibility bound, not a per-stay one, and leaving it flat is
+// exactly what let 2-night tax totals through.
 function pricesFromText(text) {
   const re = /(?:AUD|AU\$|A\$|\$)\s*(\d[\d,]*(?:\.\d{1,2})?)/gi;
+  const cleaned = stripTaxAmounts(text);
   const out = [];
   let m;
-  while ((m = re.exec(text)) !== null) {
+  while ((m = re.exec(cleaned)) !== null) {
     const value = parseFloat(m[1].replace(/,/g, ''));
     if (value >= 50 && value < 10000) out.push(value);
   }
@@ -257,7 +282,10 @@ async function getRoomRates(page, nights) {
     // then likely a stay total).
     let perNight = perNightFromText(text);
     if (perNight == null) {
-      const prices = pricesFromText(text);
+      // A real stay total must be at least $50 × nights. Tax amounts are already
+      // stripped inside pricesFromText; this nights-scaled floor is the backstop
+      // for any small non-price number that slips past in unrecognised wording.
+      const prices = pricesFromText(text).filter(n => n >= 50 * nights);
       if (prices.length === 0) continue;
       perNight = nights > 1 ? Math.min(...prices) / nights : Math.min(...prices);
     }
@@ -380,7 +408,9 @@ async function scrapeOne(browser, property, checkIn, workerId) {
       if (rooms.length === 0 && recorded.size === 0 && !isSoldOut && !notAvailable) {
         let lowest = perNightFromText(bodyText);
         if (lowest == null) {
-          const prices = pricesFromText(bodyText).filter(n => n >= 150);
+          // $150/night minimum for this last-resort path, scaled to the stay
+          // length being probed so a multi-night tax total can't sneak in here.
+          const prices = pricesFromText(bodyText).filter(n => n >= 150 * len);
           if (prices.length) lowest = Math.min(...prices) / len;
         }
         if (lowest != null) {
