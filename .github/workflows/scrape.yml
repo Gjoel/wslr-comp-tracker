@@ -41,13 +41,8 @@ jobs:
           END_DATE: ${{ inputs.end_date }}
         run: node scrape.js
 
-      - name: Send digest email
-        if: success()
-        env:
-          DIGEST_WEBHOOK_URL: ${{ secrets.DIGEST_WEBHOOK_URL }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: node digest.js
+      # The digest email is no longer sent after every scrape.
+      # It now goes out weekly — see weekly-digest.yml.
 
       - name: Upload debug screenshots
         if: always()

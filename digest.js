@@ -1,6 +1,12 @@
-// digest.js (v2.1)
-// Compares the two most recent scrape runs and emails a daily digest of
-// big price and volume movement via the Apps Script webhook.
+// digest.js (v2.2)
+// Compares two scrape runs and emails a digest of big price and volume
+// movement via the Apps Script webhook.
+//
+// By default it compares the two most recent runs (a daily-style digest).
+// With BASELINE_DAYS_BACK=7 it runs in weekly mode: the latest full run is
+// compared against the full run closest to 7 days earlier, so the email
+// shows the week's net movement. Small on-demand runs are ignored when
+// picking the pair in weekly mode.
 //
 // Signals:
 //   1. Price moves   headline (cheapest) nightly rate per property per date,
@@ -15,6 +21,10 @@
 // Env vars (all optional except the first two):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   required
 //   DIGEST_WEBHOOK_URL   Apps Script web app URL. If unset, writes digest-preview.html locally
+//   BASELINE_DAYS_BACK=0 0 = compare the two most recent runs (default).
+//                        7 = weekly mode: compare against the run closest to
+//                        7 days before the latest. Uses the get_scrape_runs()
+//                        SQL function in Supabase.
 //   HORIZON_DAYS=60      how far ahead to compare
 //   MIN_PCT_MOVE=5       percent move needed to flag a price change
 //   MIN_ABS_MOVE=10      dollar move needed to flag a price change (both must pass)
@@ -30,7 +40,8 @@ import fs from 'fs';
 const supabaseUrl = (process.env.SUPABASE_URL || '').trim().replace(/^\uFEFF/, '').replace(/\/rest\/v1\/?$/i, '').replace(/\/+$/, '');
 const supabase = createClient(supabaseUrl, (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim().replace(/^\uFEFF/, ''));
 
-const DIGEST_URL      = process.env.DIGEST_WEBHOOK_URL;
+const DIGEST_URL         = process.env.DIGEST_WEBHOOK_URL;
+const BASELINE_DAYS_BACK = parseInt(process.env.BASELINE_DAYS_BACK || '0', 10);
 const HORIZON_DAYS    = parseInt(process.env.HORIZON_DAYS || '60', 10);
 const MIN_PCT_MOVE    = parseFloat(process.env.MIN_PCT_MOVE || '5');
 const MIN_ABS_MOVE    = parseFloat(process.env.MIN_ABS_MOVE || '10');
@@ -78,27 +89,40 @@ function deltaSpan(n) {
 
 // ---------- Supabase fetch (paginated) ----------
 
-async function getLatestRuns() {
-  const seen = new Set();
-  const runs = [];
-  for (let from = 0; from < 50000; from += PAGE) {
-    const { data, error } = await supabase
-      .from('competitor_room_rates')
-      .select('scrape_run_id, scraped_at')
-      .order('scraped_at', { ascending: false })
-      .range(from, from + PAGE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    for (const r of data) {
-      if (!seen.has(r.scrape_run_id)) {
-        seen.add(r.scrape_run_id);
-        runs.push({ id: r.scrape_run_id, scraped_at: r.scraped_at });
-        if (runs.length >= 2) return runs;
-      }
-    }
-    if (data.length < PAGE) break;
+// One row per scrape run, newest first: { id, scraped_at, rows }.
+// Uses the get_scrape_runs() SQL function so we never page through rate rows.
+async function getRuns() {
+  const { data, error } = await supabase.rpc('get_scrape_runs', { limit_runs: 30 });
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.scrape_run_id,
+    scraped_at: r.run_end,
+    rows: Number(r.n_rows),
+  }));
+}
+
+// Decide which two runs to compare, returned as [current, baseline].
+//   Default (BASELINE_DAYS_BACK=0): the two most recent runs, whatever they are.
+//   Weekly  (BASELINE_DAYS_BACK=7): latest full run vs the full run closest to
+//     7 days before it. "Full" means at least half the size of the biggest
+//     recent run, so small on-demand scrapes never anchor the comparison.
+function pickRuns(all) {
+  if (all.length < 2) return null;
+  if (!BASELINE_DAYS_BACK) return [all[0], all[1]];
+
+  const biggest = Math.max(...all.map(r => r.rows));
+  const full = all.filter(r => r.rows >= biggest * 0.5);
+  if (full.length < 2) return [all[0], all[1]];
+
+  const latest = full[0];
+  const target = new Date(latest.scraped_at).getTime() - BASELINE_DAYS_BACK * 86400e3;
+  let baseline = null, bestGap = Infinity;
+  for (const r of full) {
+    if (r.id === latest.id) continue;
+    const gap = Math.abs(new Date(r.scraped_at).getTime() - target);
+    if (gap < bestGap) { bestGap = gap; baseline = r; }
   }
-  return runs;
+  return baseline ? [latest, baseline] : null;
 }
 
 async function getRunRows(runId) {
@@ -291,7 +315,7 @@ function renderEmail(runs, res) {
     <div style="background:#1a2b45;color:#fff;padding:14px 18px;border-radius:6px 6px 0 0">
       <div style="font-size:17px;font-weight:bold">WSLR Competitor Tracker</div>
       <div style="font-size:12px;color:#b9c4d6;margin-top:2px">
-        Next ${HORIZON_DAYS} days &bull; ${fmtRun(runs[0].scraped_at)} vs ${fmtRun(runs[1].scraped_at)}
+        ${BASELINE_DAYS_BACK ? 'Weekly digest &bull; ' : ''}Next ${HORIZON_DAYS} days &bull; ${fmtRun(runs[1].scraped_at)} &#8594; ${fmtRun(runs[0].scraped_at)}
       </div>
     </div>
     <div style="padding:16px 18px;border:1px solid #e2e7ee;border-top:0;border-radius:0 0 6px 6px">
@@ -316,7 +340,8 @@ function renderEmail(runs, res) {
   if (soldOut.length)    bits.push(`${soldOut.length} sold out`);
   if (backOn.length)     bits.push(`${backOn.length} back on sale`);
   if (totalSold)         bits.push(`~${totalSold} rooms sold`);
-  const subject = `Comp tracker ${sydneyToday()}: ` + (bits.length ? bits.join(', ') : 'no big movement');
+  const subject = (BASELINE_DAYS_BACK ? `Comp tracker week to ${sydneyToday()}: ` : `Comp tracker ${sydneyToday()}: `)
+    + (bits.length ? bits.join(', ') : 'no big movement');
 
   const text = bits.length ? bits.join(', ') : 'No big price or volume movement in the next ' + HORIZON_DAYS + ' days.';
 
@@ -327,13 +352,17 @@ function renderEmail(runs, res) {
 
 async function main() {
   console.log(`Window: ${WINDOW_START} to ${WINDOW_END} (${HORIZON_DAYS} days)`);
-  console.log('Finding the two most recent scrape runs...');
-  const runs = await getLatestRuns();
-  if (runs.length < 2) {
-    console.log(`Only ${runs.length} run(s) found. Need 2 to compare. Skipping digest.`);
+  console.log(BASELINE_DAYS_BACK
+    ? `Weekly mode: comparing the latest full run against the run closest to ${BASELINE_DAYS_BACK} days back...`
+    : 'Finding the two most recent scrape runs...');
+  const runs = pickRuns(await getRuns());
+  if (!runs) {
+    console.log('Fewer than 2 usable scrape runs found. Skipping digest.');
     return;
   }
-  console.log(`Comparing ${runs[0].id.slice(0, 8)} (${runs[0].scraped_at}) vs ${runs[1].id.slice(0, 8)} (${runs[1].scraped_at})`);
+  const gapDays = (new Date(runs[0].scraped_at) - new Date(runs[1].scraped_at)) / 86400e3;
+  console.log(`Comparing ${runs[0].id.slice(0, 8)} (${runs[0].scraped_at}, ${runs[0].rows} rows) vs ` +
+              `${runs[1].id.slice(0, 8)} (${runs[1].scraped_at}, ${runs[1].rows} rows) — ${gapDays.toFixed(1)} days apart`);
 
   const [currRows, prevRows] = await Promise.all([getRunRows(runs[0].id), getRunRows(runs[1].id)]);
   console.log(`Rows in window: current ${currRows.length}, previous ${prevRows.length}`);

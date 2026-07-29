@@ -1,5 +1,6 @@
 node_modules/
 .env
+digest-preview.html
 debug-*.png
 *.log
 .DS_Store

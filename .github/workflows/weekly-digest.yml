@@ -1,0 +1,42 @@
+name: Weekly digest email
+
+on:
+  schedule:
+    # Sunday 21:00 UTC = Monday 7:00am Sydney in winter (AEST), 8:00am in
+    # summer (AEDT). Monday's nightly scrape (14:00 UTC Sunday) finishes
+    # hours before this fires, so the email compares fresh Monday data
+    # against the run from a week earlier.
+    - cron: '0 21 * * 0'
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Compare against the run this many days back'
+        required: false
+        default: '7'
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Send weekly digest
+        env:
+          DIGEST_WEBHOOK_URL: ${{ secrets.DIGEST_WEBHOOK_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # 7 on the Monday schedule; override via manual run if needed
+          BASELINE_DAYS_BACK: ${{ inputs.days_back || '7' }}
+          # A week of movement is bigger than a day's — allow longer lists
+          MAX_ITEMS: '40'
+        run: node digest.js
